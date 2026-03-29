@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Music Studio VST Instrument Collection</title>
+    <meta
+      name="description"
+      content="Browse the AI Music Studio VST instrument lineup, preview each interface, and download the latest VST3 and Standalone builds."
+    />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">AI Music Studio Collection</p>
+          <h1>18 instruments, one download hub.</h1>
+          <p class="hero-text">
+            Real screenshots, live release status, and direct download buttons for every instrument in
+            <span id="repo-name">AI-Music-Studio-VST</span>.
+          </p>
+        </div>
+
+        <aside class="hero-panel">
+          <div class="stat-strip">
+            <div class="stat">
+              <span class="stat-value" id="instrument-count">18</span>
+              <span class="stat-label">Instruments</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">2</span>
+              <span class="stat-label">Formats</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">Win + macOS</span>
+              <span class="stat-label">In Each ZIP</span>
+            </div>
+          </div>
+
+          <div class="release-panel">
+            <div>
+              <p class="panel-label">Latest release</p>
+              <p class="panel-value" id="release-tag">Checking GitHub…</p>
+            </div>
+            <p class="release-note" id="release-note">
+              Download buttons will activate automatically when matching release assets are available.
+            </p>
+            <a class="ghost-link" id="releases-link" href="#" target="_blank" rel="noreferrer">Open releases</a>
+          </div>
+        </aside>
+      </header>
+
+      <main>
+        <section class="toolbar" aria-label="Catalog tools">
+          <label class="search-shell" for="catalog-search">
+            <span>Search</span>
+            <input id="catalog-search" type="search" placeholder="Find an instrument…" />
+          </label>
+          <p class="toolbar-note">Each download bundle contains the latest published Windows and macOS build for that format.</p>
+        </section>
+
+        <section class="catalog" id="catalog" aria-live="polite"></section>
+        <p class="empty-state" id="empty-state" hidden>No instruments matched that search.</p>
+      </main>
+    </div>
+
+    <template id="instrument-card-template">
+      <article class="instrument-card">
+        <div class="card-media">
+          <img class="card-image" alt="" loading="lazy" />
+        </div>
+        <div class="card-body">
+          <div class="card-heading">
+            <p class="family-badge"></p>
+            <h2 class="instrument-name"></h2>
+          </div>
+          <p class="instrument-summary"></p>
+          <div class="tag-row"></div>
+          <div class="download-row">
+            <a class="download-button" data-format="vst3">Download VST3</a>
+            <a class="download-button" data-format="standalone">Download Standalone</a>
+          </div>
+          <p class="card-footnote">Cross-platform ZIP with Windows and macOS builds when published.</p>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>

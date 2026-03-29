@@ -1,0 +1,236 @@
+[
+  {
+    "slug": "virus-synth",
+    "targetName": "VirusSynth",
+    "productName": "Virus Synth",
+    "family": "Flagship Synth",
+    "summary": "Access-style flagship synth with deep modulation, stacked oscillators, and glossy digital edge.",
+    "tags": ["deep modulation", "stacked oscillators", "multi-fx"],
+    "screenshot": "./screenshots/virus-synth.png",
+    "releaseAssets": {
+      "vst3": "virus-synth-vst3.zip",
+      "standalone": "virus-synth-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-drum-machine",
+    "targetName": "AIDrumMachine",
+    "productName": "AI Drum Machine",
+    "family": "Drum Machine",
+    "summary": "909-leaning drum workstation with punchy synthesized kit voices and performance controls.",
+    "tags": ["909 flavor", "synth drums", "performance controls"],
+    "screenshot": "./screenshots/ai-drum-machine.png",
+    "releaseAssets": {
+      "vst3": "ai-drum-machine-vst3.zip",
+      "standalone": "ai-drum-machine-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-808-machine",
+    "targetName": "AI808Machine",
+    "productName": "AI 808 Machine",
+    "family": "Drum Machine",
+    "summary": "Analogue-inspired 808 groove box with long subs, tuned percussion, and classic machine snap.",
+    "tags": ["808 flavor", "long subs", "groove ready"],
+    "screenshot": "./screenshots/ai-808-machine.png",
+    "releaseAssets": {
+      "vst3": "ai-808-machine-vst3.zip",
+      "standalone": "ai-808-machine-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-bass-synth",
+    "targetName": "AIBassSynth",
+    "productName": "AI Bass Synth",
+    "family": "Bass Synth",
+    "summary": "Mono bass synth tuned for weight, grit, and quick envelope-driven movement.",
+    "tags": ["mono bass", "fast envelopes", "low-end drive"],
+    "screenshot": "./screenshots/ai-bass-synth.png",
+    "releaseAssets": {
+      "vst3": "ai-bass-synth-vst3.zip",
+      "standalone": "ai-bass-synth-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-tb303",
+    "targetName": "AITB303",
+    "productName": "AI TB303",
+    "family": "Acid Bass",
+    "summary": "Acid line instrument with resonant squelch, glide, and pattern-ready mono behavior.",
+    "tags": ["acid lines", "resonant filters", "glide"],
+    "screenshot": "./screenshots/ai-tb303.png",
+    "releaseAssets": {
+      "vst3": "ai-tb303-vst3.zip",
+      "standalone": "ai-tb303-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-string-synth",
+    "targetName": "AIStringSynth",
+    "productName": "AI String Synth",
+    "family": "Ensemble Synth",
+    "summary": "Wide ensemble synth focused on lush stacked strings and cinematic motion.",
+    "tags": ["ensemble layers", "wide stereo", "cinematic pads"],
+    "screenshot": "./screenshots/ai-string-synth.png",
+    "releaseAssets": {
+      "vst3": "ai-string-synth-vst3.zip",
+      "standalone": "ai-string-synth-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-lead-synth",
+    "targetName": "AILeadSynth",
+    "productName": "AI Lead Synth",
+    "family": "Lead Synth",
+    "summary": "Focused lead voice with bite, fast response, and mix-cutting presence.",
+    "tags": ["cut-through leads", "fast response", "bright focus"],
+    "screenshot": "./screenshots/ai-lead-synth.png",
+    "releaseAssets": {
+      "vst3": "ai-lead-synth-vst3.zip",
+      "standalone": "ai-lead-synth-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-pad-synth",
+    "targetName": "AIPadSynth",
+    "productName": "AI Pad Synth",
+    "family": "Pad Synth",
+    "summary": "Slow-blooming poly synth for warm beds, shimmer, and stereo space.",
+    "tags": ["slow bloom", "stereo space", "warm beds"],
+    "screenshot": "./screenshots/ai-pad-synth.png",
+    "releaseAssets": {
+      "vst3": "ai-pad-synth-vst3.zip",
+      "standalone": "ai-pad-synth-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-pluck-synth",
+    "targetName": "AIPluckSynth",
+    "productName": "AI Pluck Synth",
+    "family": "Pluck Synth",
+    "summary": "Short, bright plucks with controlled transients and modern harmonic bite.",
+    "tags": ["short transients", "bright plucks", "tight attack"],
+    "screenshot": "./screenshots/ai-pluck-synth.png",
+    "releaseAssets": {
+      "vst3": "ai-pluck-synth-vst3.zip",
+      "standalone": "ai-pluck-synth-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-sampler",
+    "targetName": "AISampler",
+    "productName": "AI Sampler",
+    "family": "Sampler",
+    "summary": "Compact ROMpler-style sampler with internal banks and loop window controls.",
+    "tags": ["internal banks", "loop windows", "rompler workflow"],
+    "screenshot": "./screenshots/ai-sampler.png",
+    "releaseAssets": {
+      "vst3": "ai-sampler-vst3.zip",
+      "standalone": "ai-sampler-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-vec1-drum-pads",
+    "targetName": "AIVEC1DrumPads",
+    "productName": "AI VEC1 Drum Pads",
+    "family": "Sample Pads",
+    "summary": "23-pad sample drum workstation built around bundled VEC1-style hits.",
+    "tags": ["23 pads", "sample browsing", "kit workflow"],
+    "screenshot": "./screenshots/ai-vec1-drum-pads.png",
+    "releaseAssets": {
+      "vst3": "ai-vec1-drum-pads-vst3.zip",
+      "standalone": "ai-vec1-drum-pads-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-piano",
+    "targetName": "AIPiano",
+    "productName": "AI Piano",
+    "family": "Keys",
+    "summary": "Grand piano instrument backed by the bundled Splendid Grand library.",
+    "tags": ["grand piano", "sampled keys", "dynamic response"],
+    "screenshot": "./screenshots/ai-piano.png",
+    "releaseAssets": {
+      "vst3": "ai-piano-vst3.zip",
+      "standalone": "ai-piano-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-strings",
+    "targetName": "AIStrings",
+    "productName": "AI Strings",
+    "family": "Acoustic Ensemble",
+    "summary": "Acoustic string ensemble layered from open multisample libraries.",
+    "tags": ["ensemble strings", "open samples", "orchestral bed"],
+    "screenshot": "./screenshots/ai-strings.png",
+    "releaseAssets": {
+      "vst3": "ai-strings-vst3.zip",
+      "standalone": "ai-strings-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-violin",
+    "targetName": "AIViolin",
+    "productName": "AI Violin",
+    "family": "Solo Strings",
+    "summary": "Expressive solo violin voice with open multisample playback.",
+    "tags": ["solo violin", "open samples", "expressive phrasing"],
+    "screenshot": "./screenshots/ai-violin.png",
+    "releaseAssets": {
+      "vst3": "ai-violin-vst3.zip",
+      "standalone": "ai-violin-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-flute",
+    "targetName": "AIFlute",
+    "productName": "AI Flute",
+    "family": "Woodwind",
+    "summary": "Focused monophonic flute instrument with airy articulation and open multisamples.",
+    "tags": ["monophonic lead", "airy tone", "woodwind phrasing"],
+    "screenshot": "./screenshots/ai-flute.png",
+    "releaseAssets": {
+      "vst3": "ai-flute-vst3.zip",
+      "standalone": "ai-flute-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-saxophone",
+    "targetName": "AISaxophone",
+    "productName": "AI Saxophone",
+    "family": "Woodwind",
+    "summary": "Tenor sax voice with reed-forward bite and open multisample playback.",
+    "tags": ["tenor sax", "reed bite", "solo phrasing"],
+    "screenshot": "./screenshots/ai-saxophone.png",
+    "releaseAssets": {
+      "vst3": "ai-saxophone-vst3.zip",
+      "standalone": "ai-saxophone-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-bass-guitar",
+    "targetName": "AIBassGuitar",
+    "productName": "AI Bass Guitar",
+    "family": "Guitar",
+    "summary": "Electric bass instrument with plucked attack and grounded low-end support.",
+    "tags": ["electric bass", "plucked attack", "grounded low end"],
+    "screenshot": "./screenshots/ai-bass-guitar.png",
+    "releaseAssets": {
+      "vst3": "ai-bass-guitar-vst3.zip",
+      "standalone": "ai-bass-guitar-standalone.zip"
+    }
+  },
+  {
+    "slug": "ai-organ",
+    "targetName": "AIOrgan",
+    "productName": "AI Organ",
+    "family": "Keys",
+    "summary": "Church and combo organ textures with sustained tone and keybed feel.",
+    "tags": ["organ tones", "sustained chords", "keyboard feel"],
+    "screenshot": "./screenshots/ai-organ.png",
+    "releaseAssets": {
+      "vst3": "ai-organ-vst3.zip",
+      "standalone": "ai-organ-standalone.zip"
+    }
+  }
+]

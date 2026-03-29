@@ -1,0 +1,120 @@
+name: Release Bundled Instruments
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to create or update (for example v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clone JUCE
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          cmake -S . -B build -DJUCE_DIR="${GITHUB_WORKSPACE}/JUCE"
+
+      - name: Build Release
+        shell: bash
+        run: |
+          cmake --build build --config Release
+
+      - name: Package Windows builds by instrument
+        shell: bash
+        run: |
+          python scripts/package_platform_builds.py --build-dir build --platform windows --output-dir dist/release-input/windows
+
+      - name: Upload packaged Windows builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-input-windows
+          path: dist/release-input/windows
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clone JUCE
+        run: |
+          git clone --depth 1 https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build-macos -DJUCE_DIR="${GITHUB_WORKSPACE}/JUCE" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Release
+        run: |
+          cmake --build build-macos --config Release
+
+      - name: Package macOS builds by instrument
+        run: |
+          python3 scripts/package_platform_builds.py --build-dir build-macos --platform macos --output-dir dist/release-input/macos
+
+      - name: Upload packaged macOS builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-input-macos
+          path: dist/release-input/macos
+          if-no-files-found: error
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-windows
+      - build-macos
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download packaged Windows builds
+        uses: actions/download-artifact@v4
+        with:
+          name: release-input-windows
+          path: artifacts/windows
+
+      - name: Download packaged macOS builds
+        uses: actions/download-artifact@v4
+        with:
+          name: release-input-macos
+          path: artifacts/macos
+
+      - name: Combine release archives
+        run: |
+          python3 scripts/combine_release_assets.py --platform-dir artifacts/windows --platform-dir artifacts/macos --output-dir dist/release
+
+      - name: Create or update GitHub release
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/release/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/release/* \
+              --title "$RELEASE_TAG" \
+              --notes "Bundled AI Music Studio VST instrument builds." \
+              --target "$GITHUB_SHA"
+          fi

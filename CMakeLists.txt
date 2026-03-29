@@ -34,6 +34,8 @@ if(EXISTS "${AIMS_TR909_IMAGE}")
 endif()
 juce_add_binary_data(AIMusicStudioVirusAssets SOURCES ${AIMS_ASSET_SOURCES})
 
+option(AIMS_BUILD_SCREENSHOT_EXPORTERS "Build helper executables that render UI screenshots for the GitHub Pages catalog." OFF)
+
 function(add_ai_music_vst3 target_name product_name plugin_code flavor_code bundle_id)
   juce_add_plugin(${target_name}
       COMPANY_NAME "AI Music Studio"
@@ -79,6 +81,43 @@ function(add_ai_music_vst3 target_name product_name plugin_code flavor_code bund
         juce::juce_recommended_warning_flags)
 endfunction()
 
+function(add_ai_music_screenshot_exporter target_name product_name flavor_code)
+  set(exporter_target "${target_name}ScreenshotExporter")
+
+  juce_add_console_app(${exporter_target}
+      PRODUCT_NAME "${product_name} Screenshot Exporter")
+
+  juce_generate_juce_header(${exporter_target})
+
+  target_sources(${exporter_target}
+      PRIVATE
+        tools/ScreenshotExporterMain.cpp
+        Source/PluginProcessor.cpp
+        Source/PluginProcessor.h
+        Source/PluginEditor.cpp
+        Source/PluginEditor.h)
+
+  target_compile_definitions(${exporter_target}
+    PRIVATE
+      AIMS_INSTRUMENT_FLAVOR=${flavor_code}
+      AIMS_HAS_TR909_IMAGE=${AIMS_HAS_TR909_IMAGE}
+      AIMS_REPO_ROOT_PATH="${AIMS_REPO_ROOT}"
+      JucePlugin_Name="${product_name}"
+      JUCE_WEB_BROWSER=0
+      JUCE_USE_CURL=0)
+
+  target_link_libraries(${exporter_target}
+      PRIVATE
+        AIMusicStudioVirusAssets
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_dsp
+      PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags)
+endfunction()
+
 add_ai_music_vst3(VirusSynth "Virus Synth" AdvS 0 com.aimusicstudio.virussynth)
 add_ai_music_vst3(AIDrumMachine "AI Drum Machine" ADrm 1 com.aimusicstudio.aidrummachine)
 add_ai_music_vst3(AIBassSynth "AI Bass Synth" ABas 2 com.aimusicstudio.aibasssynth)
@@ -97,6 +136,27 @@ add_ai_music_vst3(AIFlute "AI Flute" AIFt 14 com.aimusicstudio.aiflute)
 add_ai_music_vst3(AISaxophone "AI Saxophone" AISx 15 com.aimusicstudio.aisaxophone)
 add_ai_music_vst3(AIBassGuitar "AI Bass Guitar" AIBG 16 com.aimusicstudio.aibassguitar)
 add_ai_music_vst3(AIOrgan "AI Organ" AIOr 17 com.aimusicstudio.aiorgan)
+
+if(AIMS_BUILD_SCREENSHOT_EXPORTERS)
+  add_ai_music_screenshot_exporter(VirusSynth "Virus Synth" 0)
+  add_ai_music_screenshot_exporter(AIDrumMachine "AI Drum Machine" 1)
+  add_ai_music_screenshot_exporter(AIBassSynth "AI Bass Synth" 2)
+  add_ai_music_screenshot_exporter(AIStringSynth "AI String Synth" 3)
+  add_ai_music_screenshot_exporter(AILeadSynth "AI Lead Synth" 4)
+  add_ai_music_screenshot_exporter(AIPadSynth "AI Pad Synth" 5)
+  add_ai_music_screenshot_exporter(AIPluckSynth "AI Pluck Synth" 6)
+  add_ai_music_screenshot_exporter(AISampler "AI Sampler" 7)
+  add_ai_music_screenshot_exporter(AI808Machine "AI 808 Machine" 8)
+  add_ai_music_screenshot_exporter(AITB303 "AI TB303" 9)
+  add_ai_music_screenshot_exporter(AIVEC1DrumPads "AI VEC1 Drum Pads" 10)
+  add_ai_music_screenshot_exporter(AIPiano "AI Piano" 11)
+  add_ai_music_screenshot_exporter(AIStrings "AI Strings" 12)
+  add_ai_music_screenshot_exporter(AIViolin "AI Violin" 13)
+  add_ai_music_screenshot_exporter(AIFlute "AI Flute" 14)
+  add_ai_music_screenshot_exporter(AISaxophone "AI Saxophone" 15)
+  add_ai_music_screenshot_exporter(AIBassGuitar "AI Bass Guitar" 16)
+  add_ai_music_screenshot_exporter(AIOrgan "AI Organ" 17)
+endif()
 
 if(EXISTS "${AIMS_VEC1_LIBRARY_DIR}")
   add_custom_command(TARGET AIVEC1DrumPads_VST3 POST_BUILD

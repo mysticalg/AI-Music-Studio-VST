@@ -45,9 +45,27 @@ python scripts/fetch_open_instrument_samples.py
 
 That script pulls a sparse subset of Sonatina Symphonic Orchestra for strings / violin / flute, the FreePats electric bass repository for bass guitar, and small FreePats archive sets for tenor saxophone and church organ.
 
+## GitHub Pages catalog
+
+This repo now includes a static catalog site in `docs/` that is designed for GitHub Pages. The page:
+
+- shows every bundled instrument in a responsive grid,
+- loads real screenshot PNGs from `docs/screenshots/`,
+- checks the latest GitHub release at runtime,
+- and enables direct **VST3** / **Standalone** download buttons when the matching release assets exist.
+
+The deployment workflow lives at `.github/workflows/deploy-pages.yml`.
+
 ## Automated GitHub build + download
 
 This repository includes a GitHub Actions workflow at `.github/workflows/build-vsti.yml` that compiles the bundled VST3 instruments on `windows-latest` and `macos-latest` and uploads downloadable ZIP artifacts.
+
+For durable public downloads, use `.github/workflows/release-vsti.yml`. That workflow:
+
+- builds Windows and macOS release outputs,
+- packages every instrument separately,
+- creates cross-platform ZIPs for **VST3** and **Standalone**,
+- and uploads them to a GitHub release with predictable asset names that the catalog page can discover automatically.
 
 ### When it runs
 
@@ -55,12 +73,12 @@ This repository includes a GitHub Actions workflow at `.github/workflows/build-v
 - Pull requests affecting the native VST source tree
 - Manual runs from **Actions > Build Bundled VST3 Instruments > Run workflow**
 
-### How to download
+### How to publish downloads
 
-1. Open the **Actions** tab in GitHub.
-2. Open a successful **Build Bundled VST3 Instruments** run.
-3. Download the artifact named **AI-Music-Studio-bundled-vst3-windows-release**.
-4. Unzip it and copy the contained `.vst3` bundles into the app's `vsti` folder to make them auto-appear in the rack on startup.
+1. Open **Actions > Release Bundled Instruments**.
+2. Run the workflow and provide a tag such as `v0.2.0`, or push a matching Git tag.
+3. Wait for the release workflow to finish.
+4. The GitHub Pages catalog will then pick up the latest release automatically and enable the matching download buttons.
 
 ## Build locally (Windows example)
 
@@ -79,6 +97,18 @@ cmake --build build --config Release
 
 4. JUCE creates one `*.vst3` bundle per target in the build artifacts.
 5. If you are using this repo as the `plugins/AdvancedVSTi` submodule inside AI Music Studio, copy the desired `.vst3` bundles into `../vsti/` from the parent app repo to package them with the app.
+
+## Render catalog screenshots locally
+
+If you want to refresh the UI screenshots used by the GitHub Pages catalog, build the optional screenshot exporters and run the helper script:
+
+```bash
+cmake -S . -B build-screens -DJUCE_DIR=/path/to/JUCE -DAIMS_BUILD_SCREENSHOT_EXPORTERS=ON
+cmake --build build-screens --config Release
+python scripts/render_instrument_screenshots.py --build-dir build-screens
+```
+
+That writes PNG files into `docs/screenshots/`.
 
 ## About `.dll`
 
