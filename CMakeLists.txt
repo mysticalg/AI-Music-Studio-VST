@@ -5,6 +5,8 @@ project(AdvancedVSTi VERSION 0.2.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+
 if(NOT DEFINED JUCE_DIR)
   message(FATAL_ERROR "Set -DJUCE_DIR=/path/to/JUCE")
 endif()
@@ -20,6 +22,7 @@ set(AIMS_BINARY_DATA_PLACEHOLDER "${CMAKE_CURRENT_SOURCE_DIR}/Source/BinaryDataP
 set(AIMS_ASSET_SOURCES "${AIMS_BINARY_DATA_PLACEHOLDER}")
 set(AIMS_HAS_TR909_IMAGE 0)
 set(AIMS_VEC1_LIBRARY_DIR "D:/OneDrive/Music/Sound Design/Sample Library/sample library/VEC1")
+set(AIMS_VVE1_LIBRARY_DIR "D:/OneDrive/Music/Sound Design/Sample Library/sample library/VVE1")
 set(AIMS_PIANO_LIBRARY_DIR "${AIMS_REPO_ROOT}/.cache/SplendidGrandPiano")
 if(NOT EXISTS "${AIMS_PIANO_LIBRARY_DIR}" AND EXISTS "${AIMS_HOST_REPO_ROOT}/.cache/SplendidGrandPiano")
   set(AIMS_PIANO_LIBRARY_DIR "${AIMS_HOST_REPO_ROOT}/.cache/SplendidGrandPiano")
@@ -118,6 +121,37 @@ function(add_ai_music_screenshot_exporter target_name product_name flavor_code)
         juce::juce_recommended_warning_flags)
 endfunction()
 
+function(bundle_ai_music_external_sample_library target_name library_id layout_name library_dir)
+  if(NOT EXISTS "${library_dir}")
+    return()
+  endif()
+
+  if(Python3_Interpreter_FOUND)
+    add_custom_command(TARGET ${target_name}_VST3 POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E echo "Bundling ${library_id} into ${target_name}.vst3 as a single sample pack"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources"
+      COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources/${library_id}.aimspack"
+      COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources/${library_id}"
+      COMMAND ${Python3_EXECUTABLE} "${AIMS_REPO_ROOT}/scripts/build_external_sample_pack.py"
+              --layout ${layout_name}
+              --library-root "${library_dir}"
+              --library-id "${library_id}"
+              --output "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources/${library_id}.aimspack"
+      VERBATIM)
+  else()
+    message(WARNING "Python 3 was not found; ${library_id} will be bundled as a folder instead of a single sample pack.")
+    add_custom_command(TARGET ${target_name}_VST3 POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E echo "Bundling ${library_id} sample library into ${target_name}.vst3"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources"
+      COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources/${library_id}.aimspack"
+      COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources/${library_id}"
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+              "${library_dir}"
+              "$<TARGET_FILE_DIR:${target_name}_VST3>/../Resources/${library_id}"
+      VERBATIM)
+  endif()
+endfunction()
+
 add_ai_music_vst3(VirusSynth "Virus Synth" AdvS 0 com.aimusicstudio.virussynth)
 add_ai_music_vst3(AIDrumMachine "AI Drum Machine" ADrm 1 com.aimusicstudio.aidrummachine)
 add_ai_music_vst3(AIBassSynth "AI Bass Synth" ABas 2 com.aimusicstudio.aibasssynth)
@@ -136,6 +170,7 @@ add_ai_music_vst3(AIFlute "AI Flute" AIFt 14 com.aimusicstudio.aiflute)
 add_ai_music_vst3(AISaxophone "AI Saxophone" AISx 15 com.aimusicstudio.aisaxophone)
 add_ai_music_vst3(AIBassGuitar "AI Bass Guitar" AIBG 16 com.aimusicstudio.aibassguitar)
 add_ai_music_vst3(AIOrgan "AI Organ" AIOr 17 com.aimusicstudio.aiorgan)
+add_ai_music_vst3(AIVVE1VocalMachine "AI VVE1 Vocal Machine" AVVM 18 com.aimusicstudio.aivve1vocalmachine)
 
 if(AIMS_BUILD_SCREENSHOT_EXPORTERS)
   add_ai_music_screenshot_exporter(VirusSynth "Virus Synth" 0)
@@ -156,18 +191,11 @@ if(AIMS_BUILD_SCREENSHOT_EXPORTERS)
   add_ai_music_screenshot_exporter(AISaxophone "AI Saxophone" 15)
   add_ai_music_screenshot_exporter(AIBassGuitar "AI Bass Guitar" 16)
   add_ai_music_screenshot_exporter(AIOrgan "AI Organ" 17)
+  add_ai_music_screenshot_exporter(AIVVE1VocalMachine "AI VVE1 Vocal Machine" 18)
 endif()
 
-if(EXISTS "${AIMS_VEC1_LIBRARY_DIR}")
-  add_custom_command(TARGET AIVEC1DrumPads_VST3 POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "Bundling VEC1 sample library into AI VEC1 Drum Pads.vst3"
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:AIVEC1DrumPads_VST3>/../../Resources"
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:AIVEC1DrumPads_VST3>/../Resources/VEC1"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${AIMS_VEC1_LIBRARY_DIR}"
-            "$<TARGET_FILE_DIR:AIVEC1DrumPads_VST3>/../Resources/VEC1"
-    VERBATIM)
-endif()
+bundle_ai_music_external_sample_library(AIVEC1DrumPads VEC1 vec1 "${AIMS_VEC1_LIBRARY_DIR}")
+bundle_ai_music_external_sample_library(AIVVE1VocalMachine VVE1 vve1 "${AIMS_VVE1_LIBRARY_DIR}")
 
 if(EXISTS "${AIMS_PIANO_LIBRARY_DIR}")
   add_custom_command(TARGET AIPiano_VST3 POST_BUILD

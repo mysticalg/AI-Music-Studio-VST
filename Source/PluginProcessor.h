@@ -63,6 +63,7 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     [[nodiscard]] juce::StringArray presetNames() const;
     void previewDrumPad (int midiNote, float velocity = 0.9f);
+    [[nodiscard]] bool isExternalPadFlavor() const noexcept;
     [[nodiscard]] bool isVec1DrumPadFlavor() const noexcept;
     [[nodiscard]] int externalPadCount() const noexcept;
     [[nodiscard]] ExternalPadState getExternalPadState (int padIndex) const;
@@ -93,6 +94,7 @@ private:
         drum808,
         acid303,
         vec1DrumPad,
+        vve1VocalPad,
         piano,
         stringEnsemble,
         violin,
@@ -409,9 +411,12 @@ private:
 
     struct ExternalSampleEntry
     {
-        juce::String filePath;
+        juce::String sourcePath;
         juce::String displayName;
         juce::String presetName;
+        int64_t dataOffset = 0;
+        int64_t dataSize = 0;
+        bool usesPackedData = false;
     };
 
     struct ExternalPadDefinition
@@ -540,16 +545,34 @@ private:
         return InstrumentFlavor::bassGuitar;
 #elif AIMS_INSTRUMENT_FLAVOR == 17
         return InstrumentFlavor::organ;
+#elif AIMS_INSTRUMENT_FLAVOR == 18
+        return InstrumentFlavor::vve1VocalPad;
 #else
         return InstrumentFlavor::advanced;
 #endif
+    }
+
+    [[nodiscard]] static constexpr bool isExternalPadFlavorStatic() noexcept
+    {
+        return buildFlavor() == InstrumentFlavor::vec1DrumPad
+               || buildFlavor() == InstrumentFlavor::vve1VocalPad;
+    }
+
+    [[nodiscard]] static constexpr int externalPadParameterCountForFlavor() noexcept
+    {
+        return isExternalPadFlavorStatic() ? vecPadCount : 0;
+    }
+
+    [[nodiscard]] static constexpr int externalPadMidiStartForFlavor() noexcept
+    {
+        return buildFlavor() == InstrumentFlavor::vve1VocalPad ? 60 : 36;
     }
 
     [[nodiscard]] static constexpr bool isDrumFlavor() noexcept
     {
         return buildFlavor() == InstrumentFlavor::drumMachine
                || buildFlavor() == InstrumentFlavor::drum808
-               || buildFlavor() == InstrumentFlavor::vec1DrumPad;
+               || isExternalPadFlavorStatic();
     }
 
     [[nodiscard]] static constexpr bool isSynthDrumFlavor() noexcept
@@ -587,7 +610,7 @@ private:
             return 1;
         else if constexpr (buildFlavor() == InstrumentFlavor::drumMachine || buildFlavor() == InstrumentFlavor::drum808)
             return 8;
-        else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+        else if constexpr (isExternalPadFlavorStatic())
             return 24;
         else if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
             return maxVoices;
@@ -626,7 +649,7 @@ private:
         if constexpr (buildFlavor() == InstrumentFlavor::bassSynth
                       || buildFlavor() == InstrumentFlavor::drumMachine
                       || buildFlavor() == InstrumentFlavor::drum808
-                      || buildFlavor() == InstrumentFlavor::vec1DrumPad
+                      || isExternalPadFlavorStatic()
                       || buildFlavor() == InstrumentFlavor::sampler
                       || buildFlavor() == InstrumentFlavor::pluckSynth
                       || buildFlavor() == InstrumentFlavor::piano
@@ -675,6 +698,7 @@ private:
     [[nodiscard]] std::shared_ptr<const ExternalSampleData> loadExternalSampleData (const juce::File& sourceFile,
                                                                                     const juce::String& displayName,
                                                                                     const juce::String& presetName);
+    [[nodiscard]] std::shared_ptr<const ExternalSampleData> loadExternalSampleData (const ExternalSampleEntry& sampleEntry);
     [[nodiscard]] int externalPadIndexForMidi (int midiNote) const noexcept;
     [[nodiscard]] static juce::String externalPadSampleParameterIdForIndex (int padIndex);
     [[nodiscard]] static juce::String externalPadLevelParameterIdForIndex (int padIndex);

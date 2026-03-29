@@ -727,6 +727,7 @@ void AdvancedVSTiAudioProcessorEditor::AccentLookAndFeel::drawRotarySlider (
 {
     const bool useVirusStyleKnob = theme.tributeVirus
                                    || theme.tribute909
+                                   || theme.vecPadMachine
                                    || (! theme.tribute303 && ! theme.vecPadMachine);
 
     if (theme.tribute303)
@@ -815,7 +816,7 @@ void AdvancedVSTiAudioProcessorEditor::AccentLookAndFeel::drawRotarySlider (
 
     if (useVirusStyleKnob)
     {
-        const auto rawBounds = juce::Rectangle<float> (static_cast<float> (x), static_cast<float> (y), static_cast<float> (width), static_cast<float> (height)).reduced (6.0f);
+        const auto rawBounds = juce::Rectangle<float> (static_cast<float> (x), static_cast<float> (y), static_cast<float> (width), static_cast<float> (height)).reduced (theme.vecPadMachine ? 5.5f : 6.0f);
         const auto size = juce::jmin (rawBounds.getWidth(), rawBounds.getHeight());
         const auto bounds = juce::Rectangle<float> (size, size).withCentre (rawBounds.getCentre());
         const auto centre = bounds.getCentre();
@@ -1281,7 +1282,10 @@ AdvancedVSTiAudioProcessorEditor::DrumPad::DrumPad (
     auto configurePadSlider = [this, compactVecPad, &lf] (PreviewSlider& targetSlider, const juce::String& tooltip)
     {
         targetSlider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        targetSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, compactVecPad ? 42 : (lf.theme.tribute909 ? 52 : 58), compactVecPad ? 16 : 20);
+        targetSlider.setTextBoxStyle (compactVecPad ? juce::Slider::NoTextBox : juce::Slider::TextBoxBelow,
+                                      false,
+                                      compactVecPad ? 0 : (lf.theme.tribute909 ? 52 : 58),
+                                      compactVecPad ? 0 : 20);
         targetSlider.setLookAndFeel (&lookAndFeel);
         targetSlider.setColour (juce::Slider::textBoxTextColourId, lf.theme.text);
         targetSlider.setColour (juce::Slider::textBoxBackgroundColourId, lf.theme.tribute909 ? lf.theme.faceplate.brighter (0.08f) : lf.theme.panel.brighter (0.08f));
@@ -1408,8 +1412,6 @@ void AdvancedVSTiAudioProcessorEditor::DrumPad::paint (juce::Graphics& g)
                                        lookAndFeel.theme.panel.darker (0.28f), padFace.getBottomRight(), false);
         g.setGradientFill (faceFill);
         g.fillRoundedRectangle (padFace, 14.0f);
-        g.setColour (lookAndFeel.theme.accent.withAlpha (0.18f));
-        g.fillRoundedRectangle (padFace.reduced (8.0f, 8.0f).removeFromTop (padFace.getHeight() * 0.32f), 10.0f);
         g.setColour (lookAndFeel.theme.panelEdge.brighter (0.2f));
         g.drawRoundedRectangle (padFace, 14.0f, 1.0f);
         return;
@@ -1477,7 +1479,8 @@ void AdvancedVSTiAudioProcessorEditor::DrumPad::resized()
     {
         area.removeFromTop (compactVecPad ? 2 : 4);
         presetLabel.setBounds (area.removeFromTop (compactVecPad ? 12 : 14));
-        sampleLabel.setBounds (area.removeFromTop (compactVecPad ? 18 : 24));
+        area.removeFromTop (compactVecPad ? 4 : 4);
+        sampleLabel.setBounds (area.removeFromTop (compactVecPad ? 18 : 24).translated (0, compactVecPad ? -8 : 0));
         auto footer = area.removeFromBottom (showEnvelopeControls ? (compactVecPad ? 86 : 96) : (compactVecPad ? 46 : 54));
 
         if (showEnvelopeControls)
@@ -1490,13 +1493,13 @@ void AdvancedVSTiAudioProcessorEditor::DrumPad::resized()
 
             footer.removeFromTop (compactVecPad ? 10 : 12);
             auto sliderArea = footer.reduced (compactVecPad ? 0 : 2, 0);
-            const int spacing = compactVecPad ? 4 : 6;
+            const int spacing = compactVecPad ? 0 : 6;
             const int sliderWidth = (sliderArea.getWidth() - (spacing * 2)) / 3;
-            auto layoutSliderWithLabel = [] (juce::Rectangle<int> bounds, juce::Label& label, PreviewSlider& targetSlider)
+            auto layoutSliderWithLabel = [compactVecPad] (juce::Rectangle<int> bounds, juce::Label& label, PreviewSlider& targetSlider)
             {
                 auto labelBounds = bounds.removeFromTop (10);
                 label.setBounds (labelBounds);
-                targetSlider.setBounds (bounds);
+                targetSlider.setBounds (bounds.translated (0, compactVecPad ? -3 : 0));
             };
 
             auto levelArea = sliderArea.removeFromLeft (sliderWidth);
@@ -1542,7 +1545,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
     {
         startTimerHz (15);
     }
-    else if (audioProcessor.isVec1DrumPadFlavor())
+    else if (audioProcessor.isExternalPadFlavor())
     {
         startTimerHz (12);
     }
@@ -1644,7 +1647,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
     }
     else if (usesDrumPadLayout())
     {
-        if (audioProcessor.isVec1DrumPadFlavor())
+        if (audioProcessor.isExternalPadFlavor())
         {
             defaultWidth = 1180;
             defaultHeight = 820;
@@ -1781,7 +1784,7 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
             pad->slider.onPreviewRequested = pad->onPreviewRequested;
             pad->sustainSlider.onPreviewRequested = pad->onPreviewRequested;
             pad->releaseSlider.onPreviewRequested = pad->onPreviewRequested;
-            if (audioProcessor.isVec1DrumPadFlavor())
+            if (audioProcessor.isExternalPadFlavor())
             {
                 pad->setStepperVisible (true);
                 pad->setEnvelopeControlsVisible (true);
@@ -1812,7 +1815,7 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
             ++padIndex;
         }
 
-        if (audioProcessor.isVec1DrumPadFlavor())
+        if (audioProcessor.isExternalPadFlavor())
             syncExternalPadDisplays();
     }
 
@@ -1885,12 +1888,12 @@ bool AdvancedVSTiAudioProcessorEditor::isTributeVirus() const noexcept
 bool AdvancedVSTiAudioProcessorEditor::usesDrumPadLayout() const noexcept
 {
     const auto name = normalizedPluginName (audioProcessor);
-    return audioProcessor.isVec1DrumPadFlavor() || name.contains ("drum") || name.contains ("808");
+    return audioProcessor.isExternalPadFlavor() || name.contains ("drum") || name.contains ("808");
 }
 
 bool AdvancedVSTiAudioProcessorEditor::usesFixedInstrumentLayout() const noexcept
 {
-    return ! isTribute303() && ! isTributeVirus() && ! audioProcessor.isVec1DrumPadFlavor();
+    return ! isTribute303() && ! isTributeVirus() && ! audioProcessor.isExternalPadFlavor();
 }
 
 void AdvancedVSTiAudioProcessorEditor::timerCallback()
@@ -1922,13 +1925,13 @@ void AdvancedVSTiAudioProcessorEditor::timerCallback()
         }
     }
 
-    if (audioProcessor.isVec1DrumPadFlavor())
+    if (audioProcessor.isExternalPadFlavor())
         syncExternalPadDisplays();
 }
 
 void AdvancedVSTiAudioProcessorEditor::syncExternalPadDisplays()
 {
-    if (! audioProcessor.isVec1DrumPadFlavor())
+    if (! audioProcessor.isExternalPadFlavor())
         return;
 
     const auto padCount = juce::jmin (drumPads.size(), audioProcessor.externalPadCount());
@@ -3960,6 +3963,24 @@ AdvancedVSTiAudioProcessorEditor::Theme AdvancedVSTiAudioProcessorEditor::buildT
 {
     const auto name = normalizedPluginName (audioProcessor);
 
+    if (name.contains ("vve1"))
+    {
+        Theme vocalMachine {
+            "AI VVE1 Vocal Machine",
+            "One pad per VVE1 folder and subfolder with per-pad browsing through chops, words, phrases, and loops.",
+            juce::Colour::fromRGB (224, 109, 86), juce::Colour::fromRGB (255, 194, 150),
+            juce::Colour::fromRGB (15, 18, 22), juce::Colour::fromRGB (27, 31, 38), juce::Colour::fromRGB (81, 92, 104),
+            juce::Colour::fromRGB (238, 236, 230), juce::Colour::fromRGB (182, 186, 193)
+        };
+        vocalMachine.faceplate = juce::Colour::fromRGB (24, 28, 34);
+        vocalMachine.trim = juce::Colour::fromRGB (92, 102, 112);
+        vocalMachine.legend = juce::Colour::fromRGB (248, 197, 144);
+        vocalMachine.knobBody = juce::Colour::fromRGB (42, 47, 54);
+        vocalMachine.knobCap = juce::Colour::fromRGB (220, 216, 209);
+        vocalMachine.vecPadMachine = true;
+        return vocalMachine;
+    }
+
     if (name.contains ("vec1"))
     {
         Theme padMachine {
@@ -4131,7 +4152,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
     const auto name = normalizedPluginName (audioProcessor);
     std::vector<ChoiceSpec> specs;
 
-    if (name.contains ("vec1"))
+    if (audioProcessor.isExternalPadFlavor())
         return specs;
 
     const auto presetNames = audioProcessor.presetNames();
@@ -4252,7 +4273,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
 {
     const auto name = normalizedPluginName (audioProcessor);
 
-    if (name.contains ("vec1"))
+    if (audioProcessor.isExternalPadFlavor())
         return {};
 
     if (isTributeVirus())
@@ -4573,7 +4594,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::DrumPadSpec> AdvancedVSTiAudioProc
         return spec;
     };
 
-    if (audioProcessor.isVec1DrumPadFlavor())
+    if (audioProcessor.isExternalPadFlavor())
     {
         std::vector<DrumPadSpec> specs;
         specs.reserve (static_cast<size_t> (audioProcessor.externalPadCount()));
@@ -4924,8 +4945,6 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
         auto header = chassis.reduced (18.0f, 16.0f).removeFromTop (80.0f);
         g.setColour (theme.accent.withAlpha (0.78f));
         g.fillRoundedRectangle (header.removeFromBottom (3.0f), 1.5f);
-        g.setColour (theme.accentGlow.withAlpha (0.16f));
-        g.fillRoundedRectangle (header.removeFromRight (header.getWidth() * 0.45f).translated (0.0f, 6.0f), 16.0f);
         return;
     }
 
@@ -6097,7 +6116,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
 
     if (usesDrumPadLayout())
     {
-        const bool vecPadLayout = audioProcessor.isVec1DrumPadFlavor();
+        const bool vecPadLayout = audioProcessor.isExternalPadFlavor();
         const auto uiScale = vecPadLayout
                                  ? juce::jlimit (0.72f, 1.15f, juce::jmin (getWidth() / 1280.0f, getHeight() / 900.0f))
                                  : juce::jlimit (0.8f, 1.4f, juce::jmin (getWidth() / 1180.0f, getHeight() / 860.0f));

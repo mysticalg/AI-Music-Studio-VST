@@ -65,7 +65,6 @@ constexpr std::array<float, 15> drum808VoiceLevelDefaults {
     0.74f, 0.68f, 0.64f, 0.66f, 0.72f
 };
 
-constexpr int vecPadMidiStart = 36;
 constexpr int maxVecPadSampleChoices = 4096;
 constexpr std::array<const char*, 23> vecPadFolderOrder {
     "VEC1 Bassdrums",
@@ -151,6 +150,27 @@ constexpr std::array<const char*, 23> vecPadSubfolderNames {
     "",
     ""
 };
+
+constexpr std::array<char, 8> externalPadPackMagic { 'A', 'I', 'M', 'S', 'P', 'K', '0', '1' };
+
+struct ExternalPadPackSampleSpec
+{
+    juce::String sourcePath;
+    juce::String displayName;
+    juce::String presetName;
+    int64_t dataOffset = 0;
+    int64_t dataSize = 0;
+};
+
+struct ExternalPadPackPadSpec
+{
+    juce::String title;
+    juce::String note;
+    int midiNote = 36;
+    std::vector<ExternalPadPackSampleSpec> samples;
+};
+
+juce::String cleanedExternalLabel (juce::String text);
 
 juce::StringArray classicOscillatorChoices()
 {
@@ -751,6 +771,15 @@ juce::File vecPadLibraryRoot()
     return juce::File::createFileWithoutCheckingPath (R"(D:\OneDrive\Music\Sound Design\Sample Library\sample library\VEC1)");
 }
 
+juce::File vvePadLibraryRoot()
+{
+    const auto bundledRoot = bundledInstrumentResourceRoot ("VVE1");
+    if (bundledRoot.isDirectory())
+        return bundledRoot;
+
+    return juce::File::createFileWithoutCheckingPath (R"(D:\OneDrive\Music\Sound Design\Sample Library\sample library\VVE1)");
+}
+
 juce::File pianoLibraryRoot()
 {
     const auto bundledRoot = bundledInstrumentResourceRoot ("Piano");
@@ -995,10 +1024,7 @@ bool isSupportedExternalSampleFile (const juce::File& file)
 
 juce::String cleanedExternalSampleName (const juce::File& file)
 {
-    auto name = file.getFileNameWithoutExtension();
-    if (name.startsWithIgnoreCase ("VEC1 "))
-        name = name.fromFirstOccurrenceOf (" ", false, false).trim();
-    return name;
+    return cleanedExternalLabel (file.getFileNameWithoutExtension());
 }
 
 std::vector<juce::File> findSortedChildDirectories (const juce::File& folder)
@@ -1042,6 +1068,100 @@ std::vector<juce::File> findSortedAudioFiles (const juce::File& folder)
                    return lhs.getFileName().compareIgnoreCase (rhs.getFileName()) < 0;
                });
     return result;
+}
+
+std::vector<juce::File> findSortedAudioFilesRecursive (const juce::File& folder)
+{
+    auto result = findSortedAudioFiles (folder);
+    for (const auto& childFolder : findSortedChildDirectories (folder))
+    {
+        auto childFiles = findSortedAudioFilesRecursive (childFolder);
+        result.insert (result.end(), childFiles.begin(), childFiles.end());
+    }
+    return result;
+}
+
+uint64_t readLittleEndianUInt64 (juce::InputStream& input)
+{
+    uint64_t value = 0;
+    for (int byteIndex = 0; byteIndex < 8; ++byteIndex)
+    {
+        const auto byte = input.readByte();
+        if (byte < 0)
+            return 0;
+
+        value |= static_cast<uint64_t> (static_cast<uint8_t> (byte)) << (byteIndex * 8);
+    }
+    return value;
+}
+
+std::vector<ExternalPadPackPadSpec> loadExternalPadPackLayout (const juce::File& packFile)
+{
+    std::vector<ExternalPadPackPadSpec> pads;
+    if (! packFile.existsAsFile())
+        return pads;
+
+    std::unique_ptr<juce::InputStream> stream (packFile.createInputStream());
+    if (stream == nullptr)
+        return pads;
+
+    std::array<char, 8> magic {};
+    if (stream->read (magic.data(), static_cast<int> (magic.size())) != static_cast<int> (magic.size())
+        || magic != externalPadPackMagic)
+        return pads;
+
+    const auto manifestSize = readLittleEndianUInt64 (*stream);
+    if (manifestSize == 0)
+        return pads;
+
+    juce::MemoryBlock manifestData;
+    manifestData.setSize (static_cast<size_t> (manifestSize), false);
+    if (stream->read (manifestData.getData(), static_cast<int> (manifestSize)) != static_cast<int> (manifestSize))
+        return {};
+
+    const auto manifestText = juce::String::fromUTF8 (static_cast<const char*> (manifestData.getData()),
+                                                      static_cast<int> (manifestData.getSize()));
+    const auto parsedManifest = juce::JSON::parse (manifestText);
+    const auto* manifestObject = parsedManifest.getDynamicObject();
+    const auto* padArray = manifestObject != nullptr ? manifestObject->getProperty ("pads").getArray() : nullptr;
+    if (padArray == nullptr)
+        return pads;
+
+    const auto dataStartOffset = static_cast<int64_t> (externalPadPackMagic.size() + sizeof (uint64_t) + manifestData.getSize());
+    pads.reserve (static_cast<size_t> (padArray->size()));
+
+    for (const auto& padVar : *padArray)
+    {
+        const auto* padObject = padVar.getDynamicObject();
+        const auto* sampleArray = padObject != nullptr ? padObject->getProperty ("samples").getArray() : nullptr;
+        if (padObject == nullptr || sampleArray == nullptr)
+            continue;
+
+        ExternalPadPackPadSpec pad;
+        pad.title = padObject->getProperty ("title").toString();
+        pad.note = padObject->getProperty ("note").toString();
+        pad.midiNote = padObject->getProperty ("midiNote").toString().getIntValue();
+        pad.samples.reserve (static_cast<size_t> (sampleArray->size()));
+
+        for (const auto& sampleVar : *sampleArray)
+        {
+            const auto* sampleObject = sampleVar.getDynamicObject();
+            if (sampleObject == nullptr)
+                continue;
+
+            ExternalPadPackSampleSpec sample;
+            sample.sourcePath = packFile.getFullPathName();
+            sample.displayName = sampleObject->getProperty ("displayName").toString();
+            sample.presetName = sampleObject->getProperty ("presetName").toString();
+            sample.dataOffset = dataStartOffset + sampleObject->getProperty ("offset").toString().getLargeIntValue();
+            sample.dataSize = sampleObject->getProperty ("size").toString().getLargeIntValue();
+            pad.samples.push_back (std::move (sample));
+        }
+
+        pads.push_back (std::move (pad));
+    }
+
+    return pads;
 }
 
 float paramValue (const juce::AudioProcessorValueTreeState& apvts, const char* paramId)
@@ -1367,6 +1487,56 @@ juce::File bundledInstrumentResourceRoot (const juce::String& folderName)
     return {};
 }
 
+juce::File bundledInstrumentResourceFile (const juce::String& fileName)
+{
+   #if JUCE_WINDOWS
+    HMODULE moduleHandle = nullptr;
+    if (GetModuleHandleExW (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR> (&bundledInstrumentResourceFile),
+                            &moduleHandle) != 0)
+    {
+        wchar_t modulePath[MAX_PATH] {};
+        if (GetModuleFileNameW (moduleHandle, modulePath, MAX_PATH) > 0)
+        {
+            auto moduleFile = juce::File (juce::String (modulePath));
+            auto contentsDir = moduleFile.getParentDirectory();
+            if (contentsDir.getFileName().equalsIgnoreCase ("x86_64-win"))
+                contentsDir = contentsDir.getParentDirectory();
+
+            if (contentsDir.getFileName().equalsIgnoreCase ("Contents"))
+            {
+                const auto bundledFile = contentsDir.getChildFile ("Resources").getChildFile (fileName);
+                if (bundledFile.existsAsFile())
+                    return bundledFile;
+
+                const auto legacyBundledFile = contentsDir.getParentDirectory().getChildFile ("Resources").getChildFile (fileName);
+                if (legacyBundledFile.existsAsFile())
+                    return legacyBundledFile;
+            }
+        }
+    }
+   #endif
+
+    return {};
+}
+
+juce::String cleanedExternalLabel (juce::String text)
+{
+    text = text.trim();
+    for (const auto prefix : { juce::String ("VEC1 "), juce::String ("VVE1 ") })
+    {
+        if (text.startsWithIgnoreCase (prefix))
+            return text.fromFirstOccurrenceOf (" ", false, false).trim();
+    }
+
+    return text;
+}
+
+juce::String midiNoteNameForExternalPad (int midiNote)
+{
+    return juce::MidiMessage::getMidiNoteName (midiNote, true, true, 3);
+}
+
 juce::String regionAttributeValue (const juce::String& line, const juce::String& key)
 {
     const auto token = key + "=";
@@ -1471,9 +1641,9 @@ AdvancedVSTiAudioProcessor::AdvancedVSTiAudioProcessor()
     audioFormatManager.registerBasicFormats();
     initializeExternalPadLibrary();
     apvts.addParameterListener ("PRESET", this);
-    if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    if constexpr (isExternalPadFlavorStatic())
     {
-        for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
+        for (int padIndex = 0; padIndex < externalPadParameterCountForFlavor(); ++padIndex)
             apvts.addParameterListener (externalPadSampleParameterIdForIndex (padIndex), this);
     }
     currentProgramIndex = juce::jlimit (0, juce::jmax (0, presetChoicesForFlavor().size() - 1), paramIndex (apvts, "PRESET"));
@@ -1482,9 +1652,9 @@ AdvancedVSTiAudioProcessor::AdvancedVSTiAudioProcessor()
 AdvancedVSTiAudioProcessor::~AdvancedVSTiAudioProcessor()
 {
     cancelPendingUpdate();
-    if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    if constexpr (isExternalPadFlavorStatic())
     {
-        for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
+        for (int padIndex = 0; padIndex < externalPadParameterCountForFlavor(); ++padIndex)
             apvts.removeParameterListener (externalPadSampleParameterIdForIndex (padIndex), this);
     }
     apvts.removeParameterListener ("PRESET", this);
@@ -1528,6 +1698,11 @@ void AdvancedVSTiAudioProcessor::auditionPresetNote (int midiNote, float velocit
     pendingAuditionNote.store (juce::jlimit (0, 127, midiNote));
 }
 
+bool AdvancedVSTiAudioProcessor::isExternalPadFlavor() const noexcept
+{
+    return isExternalPadFlavorStatic();
+}
+
 bool AdvancedVSTiAudioProcessor::isVec1DrumPadFlavor() const noexcept
 {
     return buildFlavor() == InstrumentFlavor::vec1DrumPad;
@@ -1535,7 +1710,7 @@ bool AdvancedVSTiAudioProcessor::isVec1DrumPadFlavor() const noexcept
 
 int AdvancedVSTiAudioProcessor::externalPadCount() const noexcept
 {
-    return isVec1DrumPadFlavor() ? vecPadCount : 0;
+    return isExternalPadFlavor() ? static_cast<int> (externalPads.size()) : 0;
 }
 
 juce::String AdvancedVSTiAudioProcessor::externalPadLevelParameterId (int padIndex) const
@@ -1556,12 +1731,14 @@ juce::String AdvancedVSTiAudioProcessor::externalPadReleaseParameterId (int padI
 AdvancedVSTiAudioProcessor::ExternalPadState AdvancedVSTiAudioProcessor::getExternalPadState (int padIndex) const
 {
     ExternalPadState state;
-    if (! isVec1DrumPadFlavor() || ! juce::isPositiveAndBelow (padIndex, vecPadCount))
+    if (! isExternalPadFlavor() || ! juce::isPositiveAndBelow (padIndex, externalPadParameterCountForFlavor()))
         return state;
 
-    state.title = vecPadTitles[static_cast<size_t> (padIndex)];
-    state.note = vecPadNotes[static_cast<size_t> (padIndex)];
-    state.midiNote = vecPadMidiStart + padIndex;
+    state.title = buildFlavor() == InstrumentFlavor::vec1DrumPad
+                      ? juce::String (vecPadTitles[static_cast<size_t> (padIndex)])
+                      : "Pad " + juce::String (padIndex + 1);
+    state.note = midiNoteNameForExternalPad (externalPadMidiStartForFlavor() + padIndex);
+    state.midiNote = externalPadMidiStartForFlavor() + padIndex;
 
     if (! juce::isPositiveAndBelow (padIndex, static_cast<int> (externalPads.size())))
     {
@@ -1595,7 +1772,7 @@ AdvancedVSTiAudioProcessor::ExternalPadState AdvancedVSTiAudioProcessor::getExte
 
 void AdvancedVSTiAudioProcessor::stepExternalPadSample (int padIndex, int delta)
 {
-    if (! isVec1DrumPadFlavor() || ! juce::isPositiveAndBelow (padIndex, static_cast<int> (externalPads.size())) || delta == 0)
+    if (! isExternalPadFlavor() || ! juce::isPositiveAndBelow (padIndex, static_cast<int> (externalPads.size())) || delta == 0)
         return;
 
     const auto& pad = externalPads[static_cast<size_t> (padIndex)];
@@ -1676,7 +1853,8 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     }
 
     updateRenderParameters();
-    refreshSampleBank();
+    if constexpr (! isExternalPadFlavorStatic())
+        refreshSampleBank();
     refreshExternalPadSamples();
     applyEnvelopeSettings();
     reset();
@@ -1781,6 +1959,8 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
         return { "Classic 808", "Deep 808", "Sharp Electro" };
     if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
         return { "VEC1 Default" };
+    if constexpr (buildFlavor() == InstrumentFlavor::vve1VocalPad)
+        return { "VVE1 Default" };
     if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
         return { "Sub Bass", "Saw Bass", "Square Bass", "Picked Bass" };
     if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
@@ -1844,107 +2024,255 @@ juce::String AdvancedVSTiAudioProcessor::externalPadReleaseParameterIdForIndex (
 
 void AdvancedVSTiAudioProcessor::initializeExternalPadLibrary()
 {
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isExternalPadFlavorStatic())
         return;
 
     externalPads.clear();
     externalPads.reserve (vecPadCount);
 
-    const auto libraryRoot = vecPadLibraryRoot();
-    const auto topLevelFolders = findSortedChildDirectories (libraryRoot);
-
-    for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
+    const auto packedLibraryFile = bundledInstrumentResourceFile (buildFlavor() == InstrumentFlavor::vec1DrumPad
+                                                                      ? "VEC1.aimspack"
+                                                                      : "VVE1.aimspack");
+    const auto packedPads = loadExternalPadPackLayout (packedLibraryFile);
+    if (! packedPads.empty())
     {
-        ExternalPadDefinition pad;
-        pad.folderName = vecPadFolderOrder[static_cast<size_t> (padIndex)];
-        pad.displayName = vecPadTitles[static_cast<size_t> (padIndex)];
-        pad.noteName = vecPadNotes[static_cast<size_t> (padIndex)];
-        pad.midiNote = vecPadMidiStart + padIndex;
-        const auto preferredSubfolder = juce::String (vecPadSubfolderNames[static_cast<size_t> (padIndex)]).trim();
-
-        auto folderIt = std::find_if (topLevelFolders.begin(), topLevelFolders.end(),
-                                      [&pad] (const juce::File& candidate)
-                                      {
-                                          return candidate.getFileName().compareIgnoreCase (pad.folderName) == 0;
-                                      });
-
-        if (folderIt != topLevelFolders.end())
+        for (const auto& packedPad : packedPads)
         {
-            auto presetFolders = findSortedChildDirectories (*folderIt);
+            if (externalPads.size() >= static_cast<size_t> (vecPadCount))
+                break;
 
-            if (preferredSubfolder.isNotEmpty())
+            ExternalPadDefinition pad;
+            pad.displayName = packedPad.title;
+            pad.noteName = packedPad.note.isNotEmpty() ? packedPad.note : midiNoteNameForExternalPad (packedPad.midiNote);
+            pad.midiNote = packedPad.midiNote;
+            pad.samples.reserve (packedPad.samples.size());
+            for (const auto& packedSample : packedPad.samples)
             {
-                auto presetIt = std::find_if (presetFolders.begin(), presetFolders.end(),
-                                              [&preferredSubfolder] (const juce::File& candidate)
-                                              {
-                                                  return candidate.getFileName().compareIgnoreCase (preferredSubfolder) == 0;
-                                              });
-
-                if (presetIt != presetFolders.end())
-                {
-                    for (const auto& sampleFile : findSortedAudioFiles (*presetIt))
-                    {
-                        pad.samples.push_back ({
-                            sampleFile.getFullPathName(),
-                            cleanedExternalSampleName (sampleFile),
-                            presetIt->getFileName().replace ("VEC1 ", "", true).trim()
-                        });
-                    }
-                }
+                pad.samples.push_back ({
+                    packedSample.sourcePath,
+                    packedSample.displayName,
+                    packedSample.presetName,
+                    packedSample.dataOffset,
+                    packedSample.dataSize,
+                    true
+                });
             }
-            else
-            {
-                for (const auto& presetFolder : presetFolders)
-                {
-                    for (const auto& sampleFile : findSortedAudioFiles (presetFolder))
-                    {
-                        pad.samples.push_back ({
-                            sampleFile.getFullPathName(),
-                            cleanedExternalSampleName (sampleFile),
-                            presetFolder.getFileName().replace ("VEC1 ", "", true).trim()
-                        });
-                    }
-                }
-            }
-
-            if (pad.samples.empty())
-            {
-                for (const auto& sampleFile : findSortedAudioFiles (*folderIt))
-                {
-                    pad.samples.push_back ({
-                        sampleFile.getFullPathName(),
-                        cleanedExternalSampleName (sampleFile),
-                        {}
-                    });
-                }
-            }
+            externalPads.push_back (std::move (pad));
         }
 
-        externalPads.push_back (std::move (pad));
+        return;
+    }
+
+    if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    {
+        const auto libraryRoot = vecPadLibraryRoot();
+        const auto topLevelFolders = findSortedChildDirectories (libraryRoot);
+
+        for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
+        {
+            ExternalPadDefinition pad;
+            pad.folderName = vecPadFolderOrder[static_cast<size_t> (padIndex)];
+            pad.displayName = vecPadTitles[static_cast<size_t> (padIndex)];
+            pad.noteName = vecPadNotes[static_cast<size_t> (padIndex)];
+            pad.midiNote = externalPadMidiStartForFlavor() + padIndex;
+            const auto preferredSubfolder = juce::String (vecPadSubfolderNames[static_cast<size_t> (padIndex)]).trim();
+
+            auto folderIt = std::find_if (topLevelFolders.begin(), topLevelFolders.end(),
+                                          [&pad] (const juce::File& candidate)
+                                          {
+                                              return candidate.getFileName().compareIgnoreCase (pad.folderName) == 0;
+                                          });
+
+            if (folderIt != topLevelFolders.end())
+            {
+                auto presetFolders = findSortedChildDirectories (*folderIt);
+
+                if (preferredSubfolder.isNotEmpty())
+                {
+                    auto presetIt = std::find_if (presetFolders.begin(), presetFolders.end(),
+                                                  [&preferredSubfolder] (const juce::File& candidate)
+                                                  {
+                                                      return candidate.getFileName().compareIgnoreCase (preferredSubfolder) == 0;
+                                                  });
+
+                    if (presetIt != presetFolders.end())
+                    {
+                        for (const auto& sampleFile : findSortedAudioFiles (*presetIt))
+                        {
+                            pad.samples.push_back ({
+                                sampleFile.getFullPathName(),
+                                cleanedExternalSampleName (sampleFile),
+                                cleanedExternalLabel (presetIt->getFileName()),
+                                0,
+                                0,
+                                false
+                            });
+                        }
+                    }
+                }
+                else
+                {
+                    for (const auto& presetFolder : presetFolders)
+                    {
+                        for (const auto& sampleFile : findSortedAudioFiles (presetFolder))
+                        {
+                            pad.samples.push_back ({
+                                sampleFile.getFullPathName(),
+                                cleanedExternalSampleName (sampleFile),
+                                cleanedExternalLabel (presetFolder.getFileName()),
+                                0,
+                                0,
+                                false
+                            });
+                        }
+                    }
+                }
+
+                if (pad.samples.empty())
+                {
+                    for (const auto& sampleFile : findSortedAudioFiles (*folderIt))
+                    {
+                        pad.samples.push_back ({
+                            sampleFile.getFullPathName(),
+                            cleanedExternalSampleName (sampleFile),
+                            {},
+                            0,
+                            0,
+                            false
+                        });
+                    }
+                }
+            }
+
+            externalPads.push_back (std::move (pad));
+        }
+        return;
+    }
+
+    if constexpr (buildFlavor() == InstrumentFlavor::vve1VocalPad)
+    {
+        const auto libraryRoot = vvePadLibraryRoot();
+        const auto topLevelFolders = findSortedChildDirectories (libraryRoot);
+        int midiNote = externalPadMidiStartForFlavor();
+
+        for (const auto& topLevelFolder : topLevelFolders)
+        {
+            if (externalPads.size() >= static_cast<size_t> (vecPadCount))
+                break;
+
+            ExternalPadDefinition topLevelPad;
+            topLevelPad.folderName = topLevelFolder.getFileName();
+            topLevelPad.displayName = cleanedExternalLabel (topLevelFolder.getFileName());
+            topLevelPad.noteName = midiNoteNameForExternalPad (midiNote);
+            topLevelPad.midiNote = midiNote++;
+
+            for (const auto& sampleFile : findSortedAudioFilesRecursive (topLevelFolder))
+            {
+                topLevelPad.samples.push_back ({
+                    sampleFile.getFullPathName(),
+                    cleanedExternalSampleName (sampleFile),
+                    cleanedExternalLabel (sampleFile.getParentDirectory().getFileName()),
+                    0,
+                    0,
+                    false
+                });
+            }
+            externalPads.push_back (std::move (topLevelPad));
+
+            for (const auto& subFolder : findSortedChildDirectories (topLevelFolder))
+            {
+                if (externalPads.size() >= static_cast<size_t> (vecPadCount))
+                    break;
+
+                ExternalPadDefinition subPad;
+                subPad.folderName = subFolder.getRelativePathFrom (libraryRoot).replaceCharacter ('\\', '/');
+                subPad.displayName = cleanedExternalLabel (subFolder.getFileName());
+                subPad.noteName = midiNoteNameForExternalPad (midiNote);
+                subPad.midiNote = midiNote++;
+
+                for (const auto& sampleFile : findSortedAudioFiles (subFolder))
+                {
+                    subPad.samples.push_back ({
+                        sampleFile.getFullPathName(),
+                        cleanedExternalSampleName (sampleFile),
+                        cleanedExternalLabel (topLevelFolder.getFileName()),
+                        0,
+                        0,
+                        false
+                    });
+                }
+
+                externalPads.push_back (std::move (subPad));
+            }
+        }
     }
 }
 
 void AdvancedVSTiAudioProcessor::refreshExternalPadSamples()
 {
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isExternalPadFlavorStatic())
         return;
 
-    for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
-        loadExternalPadSample (padIndex);
+    for (int padIndex = 0; padIndex < externalPadParameterCountForFlavor(); ++padIndex)
+    {
+        if (juce::isPositiveAndBelow (padIndex, static_cast<int> (externalPads.size())))
+        {
+            loadExternalPadSample (padIndex);
+            continue;
+        }
+
+        std::atomic_store (&externalPadSamples[static_cast<size_t> (padIndex)], std::shared_ptr<const ExternalSampleData> {});
+        loadedExternalPadIndices[static_cast<size_t> (padIndex)] = -1;
+    }
 }
 
 std::shared_ptr<const AdvancedVSTiAudioProcessor::ExternalSampleData> AdvancedVSTiAudioProcessor::loadExternalSampleData (const juce::File& sourceFile,
                                                                                                                              const juce::String& displayName,
                                                                                                                              const juce::String& presetName)
 {
-    std::unique_ptr<juce::AudioFormatReader> reader (audioFormatManager.createReaderFor (sourceFile));
+    ExternalSampleEntry sampleEntry;
+    sampleEntry.sourcePath = sourceFile.getFullPathName();
+    sampleEntry.displayName = displayName;
+    sampleEntry.presetName = presetName;
+    return loadExternalSampleData (sampleEntry);
+}
+
+std::shared_ptr<const AdvancedVSTiAudioProcessor::ExternalSampleData> AdvancedVSTiAudioProcessor::loadExternalSampleData (const ExternalSampleEntry& sampleEntry)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader;
+    juce::MemoryBlock packedSampleData;
+
+    if (sampleEntry.usesPackedData)
+    {
+        const auto packFile = juce::File::createFileWithoutCheckingPath (sampleEntry.sourcePath);
+        std::unique_ptr<juce::InputStream> stream (packFile.createInputStream());
+        if (stream == nullptr
+            || ! stream->setPosition (sampleEntry.dataOffset)
+            || sampleEntry.dataSize <= 0
+            || sampleEntry.dataSize > (std::numeric_limits<int>::max)())
+            return {};
+
+        packedSampleData.setSize (static_cast<size_t> (sampleEntry.dataSize), false);
+        if (stream->read (packedSampleData.getData(), static_cast<int> (packedSampleData.getSize())) != static_cast<int> (packedSampleData.getSize()))
+            return {};
+
+        reader.reset (audioFormatManager.createReaderFor (std::make_unique<juce::MemoryInputStream> (packedSampleData.getData(),
+                                                                                                      packedSampleData.getSize(),
+                                                                                                      false)));
+    }
+    else
+    {
+        const auto sourceFile = juce::File::createFileWithoutCheckingPath (sampleEntry.sourcePath);
+        reader.reset (audioFormatManager.createReaderFor (sourceFile));
+    }
+
     if (reader == nullptr || reader->lengthInSamples <= 0)
         return {};
 
     auto sampleData = std::make_shared<ExternalSampleData>();
     sampleData->sampleRate = reader->sampleRate;
-    sampleData->displayName = displayName;
-    sampleData->presetName = presetName;
+    sampleData->displayName = sampleEntry.displayName;
+    sampleData->presetName = sampleEntry.presetName;
     sampleData->audio.setSize (1, static_cast<int> (reader->lengthInSamples));
     sampleData->audio.clear();
 
@@ -2420,7 +2748,7 @@ void AdvancedVSTiAudioProcessor::assignAcousticSampleToVoice (VoiceState& voice,
 
 void AdvancedVSTiAudioProcessor::loadExternalPadSample (int padIndex)
 {
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isExternalPadFlavorStatic())
         return;
 
     if (! juce::isPositiveAndBelow (padIndex, static_cast<int> (externalPads.size())))
@@ -2441,10 +2769,7 @@ void AdvancedVSTiAudioProcessor::loadExternalPadSample (int padIndex)
         && std::atomic_load (&externalPadSamples[static_cast<size_t> (padIndex)]) != nullptr)
         return;
 
-    const auto sourceFile = juce::File::createFileWithoutCheckingPath (pad.samples[static_cast<size_t> (desiredIndex)].filePath);
-    const auto sampleData = loadExternalSampleData (sourceFile,
-                                                    pad.samples[static_cast<size_t> (desiredIndex)].displayName,
-                                                    pad.samples[static_cast<size_t> (desiredIndex)].presetName);
+    const auto sampleData = loadExternalSampleData (pad.samples[static_cast<size_t> (desiredIndex)]);
     if (sampleData == nullptr)
     {
         std::atomic_store (&externalPadSamples[static_cast<size_t> (padIndex)], std::shared_ptr<const ExternalSampleData> {});
@@ -2458,11 +2783,11 @@ void AdvancedVSTiAudioProcessor::loadExternalPadSample (int padIndex)
 
 int AdvancedVSTiAudioProcessor::externalPadIndexForMidi (int midiNote) const noexcept
 {
-    if (! isVec1DrumPadFlavor())
+    if (! isExternalPadFlavor())
         return -1;
 
-    const auto index = midiNote - vecPadMidiStart;
-    return juce::isPositiveAndBelow (index, vecPadCount) ? index : -1;
+    const auto index = midiNote - externalPadMidiStartForFlavor();
+    return juce::isPositiveAndBelow (index, static_cast<int> (externalPads.size())) ? index : -1;
 }
 
 void AdvancedVSTiAudioProcessor::assignPianoSampleToVoice (VoiceState& voice, int midiNote, float velocity)
@@ -3344,7 +3669,7 @@ void AdvancedVSTiAudioProcessor::startVoiceForMidiNote (int midiNote, float velo
     voice.externalSampleLoopStart = 0;
     voice.externalSampleLoopEnd = 0;
     voice.externalSampleLoopEnabled = false;
-    voice.externalSample = (externalPadIndex >= 0 && juce::isPositiveAndBelow (externalPadIndex, vecPadCount))
+    voice.externalSample = (externalPadIndex >= 0 && juce::isPositiveAndBelow (externalPadIndex, static_cast<int> (externalPads.size())))
                                ? std::atomic_load (&externalPadSamples[static_cast<size_t> (externalPadIndex)])
                                : std::shared_ptr<const ExternalSampleData> {};
     if constexpr (buildFlavor() == InstrumentFlavor::piano)
@@ -3547,7 +3872,7 @@ void AdvancedVSTiAudioProcessor::handleMidiMessage (const juce::MidiMessage& msg
     if (msg.isNoteOn())
     {
         int externalPadIndex = -1;
-        if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+        if constexpr (isExternalPadFlavorStatic())
         {
             externalPadIndex = externalPadIndexForMidi (msg.getNoteNumber());
             if (externalPadIndex < 0)
@@ -3597,12 +3922,13 @@ void AdvancedVSTiAudioProcessor::handleMidiMessage (const juce::MidiMessage& msg
 
     if (msg.isNoteOff())
     {
-        if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+        if constexpr (isExternalPadFlavorStatic())
         {
             const auto note = msg.getNoteNumber();
             for (auto& voice : voices)
             {
-                if (! voice.active || voice.midiNote != note || ! juce::isPositiveAndBelow (voice.externalPadIndex, vecPadCount))
+                if (! voice.active || voice.midiNote != note
+                    || ! juce::isPositiveAndBelow (voice.externalPadIndex, externalPadParameterCountForFlavor()))
                     continue;
 
                 const auto padIndex = static_cast<size_t> (voice.externalPadIndex);
@@ -4220,7 +4546,7 @@ float AdvancedVSTiAudioProcessor::renderExternalPadVoiceSample (VoiceState& voic
     const auto sampleA = sampleData->audio.getSample (0, indexA);
     const auto sampleB = sampleData->audio.getSample (0, indexB);
     const auto output = juce::jmap (alpha, sampleA, sampleB);
-    const auto padIndex = juce::jlimit (0, vecPadCount - 1, voice.externalPadIndex);
+    const auto padIndex = juce::jlimit (0, externalPadParameterCountForFlavor() - 1, voice.externalPadIndex);
     const auto sustainTime = juce::jmax (0.0f, renderParams.externalPadSustainTimes[static_cast<size_t> (padIndex)]);
     const auto releaseTime = juce::jmax (0.0f, renderParams.externalPadReleaseTimes[static_cast<size_t> (padIndex)]);
     auto envelope = 1.0f;
@@ -4314,7 +4640,7 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
     if (! voice.active)
         return 0.0f;
 
-    if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    if constexpr (isExternalPadFlavorStatic())
         return renderExternalPadVoiceSample (voice);
 
     if constexpr (isSynthDrumFlavor())
@@ -5118,7 +5444,7 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     renderParams.filterBalance = paramValue (apvts, "FILTERBALANCE");
     renderParams.panorama = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "PANORAMA") : 0.0f;
     renderParams.keyFollow = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "KEYFOLLOW") : 0.0f;
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isExternalPadFlavorStatic())
     {
         renderParams.sampleBank = paramIndex (apvts, "SAMPLEBANK");
         renderParams.sampleStart = paramValue (apvts, "SAMPLESTART");
@@ -5234,7 +5560,7 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
         for (size_t index = 0; index < drumVoiceLevelParamIds.size(); ++index)
             renderParams.drumVoiceLevels[index] = paramValue (apvts, drumVoiceLevelParamIds[index]);
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    else if constexpr (isExternalPadFlavorStatic())
     {
         renderParams.drumMasterLevel = paramValue (apvts, "DRUMMASTERLEVEL");
         renderParams.drumKickAttack = 0.5f;
@@ -5246,7 +5572,7 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
         renderParams.externalPadSustainTimes.fill (120.0f);
         renderParams.externalPadReleaseTimes.fill (0.2f);
 
-        for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
+        for (int padIndex = 0; padIndex < externalPadParameterCountForFlavor(); ++padIndex)
         {
             renderParams.externalPadLevels[static_cast<size_t> (padIndex)] = paramValue (apvts, externalPadLevelParameterIdForIndex (padIndex).toRawUTF8());
             renderParams.externalPadSustainTimes[static_cast<size_t> (padIndex)] = paramValue (apvts, externalPadSustainParameterIdForIndex (padIndex).toRawUTF8());
@@ -5277,7 +5603,7 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     renderParams.filterEnv.sustain = paramValue (apvts, "FILTSUSTAIN");
     renderParams.filterEnv.release = paramValue (apvts, "FILTRELEASE");
 
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isExternalPadFlavorStatic())
         refreshSampleBank();
 }
 
@@ -5870,7 +6196,7 @@ void AdvancedVSTiAudioProcessor::setStateInformation (const void* data, int size
     pendingPresetIndex.store (-1);
     currentProgramIndex = juce::jlimit (0, juce::jmax (0, getNumPrograms() - 1), paramIndex (apvts, "PRESET"));
     updateRenderParameters();
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isExternalPadFlavorStatic())
         refreshSampleBank();
     else
         refreshExternalPadSamples();
@@ -6060,7 +6386,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         drumVoiceDecayDefaults = drum808VoiceDecayDefaults;
         drumVoiceLevelDefaults = drum808VoiceLevelDefaults;
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    else if constexpr (isExternalPadFlavorStatic())
     {
         oscDefault = 4;
         detuneDefault = 0.0f;
@@ -6563,7 +6889,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
                                                                             drumVoiceDecayDefaults[index]));
         }
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    else if constexpr (isExternalPadFlavorStatic())
     {
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("DETUNE", "Detune", 0.0f, 1.0f, 0.0f));
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("FMAMOUNT", "FM Amount", 0.0f, 1.0f, 0.0f));
@@ -6756,13 +7082,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
                                                                             drumVoiceLevelDefaults[index]));
         }
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    else if constexpr (isExternalPadFlavorStatic())
     {
         const auto sustainRange = juce::NormalisableRange<float> (0.0f, 120.0f, 0.01f, 0.35f);
         const auto releaseRange = juce::NormalisableRange<float> (0.0f, 12.0f, 0.01f, 0.4f);
-        for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
+        for (int padIndex = 0; padIndex < externalPadParameterCountForFlavor(); ++padIndex)
         {
-            const auto padTitle = juce::String (vecPadTitles[static_cast<size_t> (padIndex)]);
+            const auto padTitle = buildFlavor() == InstrumentFlavor::vec1DrumPad
+                                      ? juce::String (vecPadTitles[static_cast<size_t> (padIndex)])
+                                      : "Vocal Pad " + juce::String (padIndex + 1).paddedLeft ('0', 2);
             params.push_back (std::make_unique<juce::AudioParameterFloat> (externalPadLevelParameterIdForIndex (padIndex),
                                                                             padTitle + " Level",
                                                                             0.0f, 1.5f,
@@ -8362,7 +8690,7 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 break;
         }
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    else if constexpr (isExternalPadFlavorStatic())
     {
         setParameterActual ("DRUMMASTERLEVEL", 1.0f);
         setParameterActual ("DETUNE", 0.0f);
@@ -8374,7 +8702,7 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
         setParameterActual ("RESONANCE", 0.1f);
         setParameterActual ("FILTERENVAMOUNT", 0.0f);
 
-        for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
+        for (int padIndex = 0; padIndex < externalPadParameterCountForFlavor(); ++padIndex)
         {
             setParameterActual (externalPadLevelParameterIdForIndex (padIndex).toRawUTF8(), 1.0f);
             setParameterActual (externalPadSustainParameterIdForIndex (padIndex).toRawUTF8(), 120.0f);
@@ -8434,7 +8762,7 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
     }
 
     updateRenderParameters();
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isExternalPadFlavorStatic())
         refreshSampleBank();
     else
         refreshExternalPadSamples();
@@ -8451,7 +8779,7 @@ void AdvancedVSTiAudioProcessor::parameterChanged (const juce::String& parameter
         return;
     }
 
-    if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    if constexpr (isExternalPadFlavorStatic())
     {
         if (parameterID.startsWith ("VECPADSELECT_"))
         {
@@ -8469,7 +8797,7 @@ void AdvancedVSTiAudioProcessor::handleAsyncUpdate()
     if (presetIndex >= 0)
         applyPresetByIndex (presetIndex);
 
-    if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
+    if constexpr (isExternalPadFlavorStatic())
     {
         if (presetIndex >= 0 || shouldRefreshExternalPads)
             refreshExternalPadSamples();
