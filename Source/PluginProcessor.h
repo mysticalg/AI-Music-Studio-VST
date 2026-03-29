@@ -604,7 +604,7 @@ private:
         else if constexpr (buildFlavor() == InstrumentFlavor::piano)
             return 16;
         else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
-            return 12;
+            return 8;
         else if constexpr (buildFlavor() == InstrumentFlavor::violin)
             return 8;
         else if constexpr (buildFlavor() == InstrumentFlavor::flute)

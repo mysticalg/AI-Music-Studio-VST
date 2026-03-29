@@ -6271,8 +6271,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
     {
         oscDefault = 4;
-        polyphonyDefault = 10;
-        unisonDefault = 2;
+        polyphonyDefault = 8;
+        unisonDefault = 1;
         detuneDefault = 0.0f;
         gateDefault = 8.0f;
         ampAttackDefault = 0.06f;
@@ -7393,15 +7393,15 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("REVERBMIX", 0.28f);
                 break;
             default:
-                setParameterActual ("UNISON", 2.0f);
+                setParameterActual ("UNISON", 1.0f);
                 setParameterActual ("CUTOFF", 4200.0f);
                 setParameterActual ("AMPATTACK", 0.06f);
                 setParameterActual ("AMPDECAY", 0.48f);
                 setParameterActual ("AMPSUSTAIN", 0.9f);
-                setParameterActual ("AMPRELEASE", 0.9f);
+                setParameterActual ("AMPRELEASE", 0.55f);
                 setParameterActual ("LFO1PITCH", 0.18f);
-                setParameterActual ("FXMIX", 0.12f);
-                setParameterActual ("REVERBMIX", 0.18f);
+                setParameterActual ("FXMIX", 0.08f);
+                setParameterActual ("REVERBMIX", 0.14f);
                 break;
         }
     }

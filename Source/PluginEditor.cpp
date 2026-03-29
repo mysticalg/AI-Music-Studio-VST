@@ -94,9 +94,9 @@ constexpr int kFixedInstrumentChoiceWidth = 236;
 constexpr int kFixedInstrumentChoiceHeight = 82;
 constexpr int kFixedInstrumentChoiceGap = 16;
 constexpr int kFixedInstrumentChoiceBottomGap = 26;
-constexpr int kFixedInstrumentKnobCellWidth = 184;
+constexpr int kFixedInstrumentLabelWidth = 112;
+constexpr int kFixedInstrumentKnobVisualGap = 30;
 constexpr int kFixedInstrumentKnobRowHeight = 112;
-constexpr int kFixedInstrumentKnobColumnGap = 18;
 constexpr int kFixedInstrumentKnobRowGap = 20;
 constexpr int kFixedInstrumentBottomPadding = 32;
 constexpr int kFixedDrumMachineWidth = 1280;
@@ -136,6 +136,15 @@ int fixedDrumSectionWidth (int knobCount)
 
     return (kFixedDrumSectionPaddingX * 2)
            + fixedDrumKnobRowWidth (knobCount);
+}
+
+int fixedInstrumentKnobRowWidth (int knobCount)
+{
+    if (knobCount <= 0)
+        return 0;
+
+    return (knobCount * kVirusKnobWidth)
+           + ((knobCount - 1) * kFixedInstrumentKnobVisualGap);
 }
 
 int fixedInstrumentKnobColumns (int knobCount)
@@ -1606,8 +1615,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
                                            : (choiceCards.size() * kFixedInstrumentChoiceWidth)
                                                  + ((choiceCards.size() - 1) * kFixedInstrumentChoiceGap)
                                                  + (kFixedInstrumentOuterPadding * 2);
-            const int knobGridWidth = (knobColumns * kFixedInstrumentKnobCellWidth)
-                                      + ((knobColumns - 1) * kFixedInstrumentKnobColumnGap)
+            const int knobGridWidth = fixedInstrumentKnobRowWidth (knobColumns)
                                       + (kFixedInstrumentOuterPadding * 2);
 
             defaultWidth = juce::jmax (kFixedInstrumentWidth, juce::jmax (choiceRowWidth, knobGridWidth));
@@ -4972,8 +4980,8 @@ void AdvancedVSTiAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
             if (knobBounds.isEmpty())
                 continue;
 
-            const int labelWidth = isTribute909() ? kFixedDrumLabelWidth : kFixedInstrumentKnobCellWidth;
-            const int labelYOffset = isTribute909() ? -12 : 4;
+            const int labelWidth = isTribute909() ? kFixedDrumLabelWidth : kFixedInstrumentLabelWidth;
+            const int labelYOffset = isTribute909() ? -12 : -9;
             const int labelHeight = isTribute909() ? 24 : 28;
             auto labelBounds = juce::Rectangle<int> (knobBounds.getCentreX() - (labelWidth / 2),
                                                      knobBounds.getBottom() + labelYOffset,
@@ -6066,17 +6074,16 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         for (int row = 0; row < knobRows; ++row)
         {
             const int rowCount = juce::jmin (knobColumns, knobCards.size() - knobIndex);
-            const int rowWidth = rowCount * kFixedInstrumentKnobCellWidth
-                                 + (rowCount - 1) * kFixedInstrumentKnobColumnGap;
+            const int rowWidth = fixedInstrumentKnobRowWidth (rowCount);
             int x = area.getX() + (area.getWidth() - rowWidth) / 2;
 
             for (int column = 0; column < rowCount; ++column)
             {
-                knobCards[knobIndex]->setBounds (x + ((kFixedInstrumentKnobCellWidth - kVirusKnobWidth) / 2),
+                knobCards[knobIndex]->setBounds (x,
                                                  rowY,
                                                  kVirusKnobWidth,
                                                  kVirusKnobHeight);
-                x += kFixedInstrumentKnobCellWidth + kFixedInstrumentKnobColumnGap;
+                x += kVirusKnobWidth + kFixedInstrumentKnobVisualGap;
                 ++knobIndex;
             }
 
