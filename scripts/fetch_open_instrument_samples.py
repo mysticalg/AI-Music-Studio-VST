@@ -20,8 +20,10 @@ SFZ_OPCODE_RE = re.compile(r"([A-Za-z0-9_]+)=([^<>\r\n]*?)(?=(?:\s+[A-Za-z0-9_]+
 BASS_RAW_ROOT = "https://raw.githubusercontent.com/freepats/electric-bass-YR/main/"
 
 SSO_SPARSE_DIRS = [
+    "Sonatina Symphonic Orchestra/Chorus - Performance",
     "Sonatina Symphonic Orchestra/Strings - Performance",
     "Sonatina Symphonic Orchestra/Woodwinds - Performance",
+    "Sonatina Symphonic Orchestra/Samples/Chorus",
     "Sonatina Symphonic Orchestra/Samples/1st Violins",
     "Sonatina Symphonic Orchestra/Samples/Violas",
     "Sonatina Symphonic Orchestra/Samples/Celli",
@@ -30,6 +32,7 @@ SSO_SPARSE_DIRS = [
     "Sonatina Symphonic Orchestra/Samples/Flute 1",
     "Sonatina Symphonic Orchestra/Samples/Flute 2",
     "Sonatina Symphonic Orchestra/Samples/Alto Flute",
+    "Sonatina Symphonic Orchestra/Samples-looped/Chorus",
     "Sonatina Symphonic Orchestra/Samples-looped/Violin 1",
     "Sonatina Symphonic Orchestra/Samples-looped/Violin 2",
     "Sonatina Symphonic Orchestra/Samples-looped/Flute 1",

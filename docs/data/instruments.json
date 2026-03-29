@@ -169,6 +169,19 @@
     }
   },
   {
+    "slug": "ai-choir",
+    "targetName": "AIChoir",
+    "productName": "AI Choir",
+    "family": "Vocal Ensemble",
+    "summary": "Realistic choir pad instrument with open chorus multisamples and a lightweight generated fallback.",
+    "tags": ["choir pad", "vocal ensemble", "cinematic bed"],
+    "screenshot": "./screenshots/ai-choir.png",
+    "releaseAssets": {
+      "vst3": "ai-choir-vst3.zip",
+      "standalone": "ai-choir-standalone.zip"
+    }
+  },
+  {
     "slug": "ai-violin",
     "targetName": "AIViolin",
     "productName": "AI Violin",

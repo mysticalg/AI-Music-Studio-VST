@@ -171,6 +171,7 @@ add_ai_music_vst3(AISaxophone "AI Saxophone" AISx 15 com.aimusicstudio.aisaxopho
 add_ai_music_vst3(AIBassGuitar "AI Bass Guitar" AIBG 16 com.aimusicstudio.aibassguitar)
 add_ai_music_vst3(AIOrgan "AI Organ" AIOr 17 com.aimusicstudio.aiorgan)
 add_ai_music_vst3(AIVVE1VocalMachine "AI VVE1 Vocal Machine" AVVM 18 com.aimusicstudio.aivve1vocalmachine)
+add_ai_music_vst3(AIChoir "AI Choir" AICh 19 com.aimusicstudio.aichoir)
 
 if(AIMS_BUILD_SCREENSHOT_EXPORTERS)
   add_ai_music_screenshot_exporter(VirusSynth "Virus Synth" 0)
@@ -192,6 +193,7 @@ if(AIMS_BUILD_SCREENSHOT_EXPORTERS)
   add_ai_music_screenshot_exporter(AIBassGuitar "AI Bass Guitar" 16)
   add_ai_music_screenshot_exporter(AIOrgan "AI Organ" 17)
   add_ai_music_screenshot_exporter(AIVVE1VocalMachine "AI VVE1 Vocal Machine" 18)
+  add_ai_music_screenshot_exporter(AIChoir "AI Choir" 19)
 endif()
 
 bundle_ai_music_external_sample_library(AIVEC1DrumPads VEC1 vec1 "${AIMS_VEC1_LIBRARY_DIR}")

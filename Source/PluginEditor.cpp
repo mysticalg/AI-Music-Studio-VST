@@ -84,7 +84,7 @@ constexpr int kVirusSliderBottomTrim = 13;
 constexpr int kVirusChoiceHeight = 22;
 constexpr int kVirusToggleSize = 16;
 constexpr int kVirusSquareButtonSize = 33;
-constexpr int kVirusKeyboardExtraHeight = 72;
+constexpr int kPreviewKeyboardExtraHeight = 72;
 
 constexpr int kFixedInstrumentWidth = 1040;
 constexpr int kFixedInstrumentOuterPadding = 24;
@@ -1676,9 +1676,16 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
         }
     }
 
-    setResizable (! isTributeVirus() && ! usesFixedInstrumentLayout() && ! backgroundImage.isValid(), false);
-    setResizeLimits (minWidth, minHeight, maxWidth, maxHeight);
-    setSize (defaultWidth, defaultHeight);
+    editorBaseDefaultWidth = defaultWidth;
+    editorBaseDefaultHeight = defaultHeight;
+    editorBaseMinWidth = minWidth;
+    editorBaseMinHeight = minHeight;
+    editorBaseMaxWidth = maxWidth;
+    editorBaseMaxHeight = maxHeight;
+    editorBaseResizable = ! isTributeVirus() && ! usesFixedInstrumentLayout() && ! backgroundImage.isValid();
+
+    setResizable (editorBaseResizable, false);
+    updateEditorSizeForPreviewKeyboard();
 }
 
 void AdvancedVSTiAudioProcessorEditor::buildEditor()
@@ -1822,52 +1829,44 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
     if (isTributeVirus())
         buildVirusPanelButtons();
 
-    if (isTributeVirus())
+    if (previewKeyboardToggle == nullptr)
     {
-        if (virusKeyboardToggle == nullptr)
+        previewKeyboardToggle = std::make_unique<LedToggleButton> (theme, "KB", true);
+        previewKeyboardToggle->setScale (0.82f);
+        previewKeyboardToggle->setTooltip ("Show or hide the preview keyboard");
+        previewKeyboardToggle->onClick = [this]
         {
-            virusKeyboardToggle = std::make_unique<LedToggleButton> (theme, "KB", true);
-            virusKeyboardToggle->setScale (0.82f);
-            virusKeyboardToggle->setTooltip ("Show or hide the preview keyboard");
-            virusKeyboardToggle->onClick = [this]
+            if (previewKeyboardToggle != nullptr)
             {
-                if (virusKeyboardToggle != nullptr)
-                {
-                    virusKeyboardVisible = virusKeyboardToggle->getToggleState();
-                    if (virusKeyboard != nullptr)
-                        virusKeyboard->setVisible (virusKeyboardVisible);
-                    setResizeLimits (kVirusTemplateWidth,
-                                     kVirusTemplateHeight + (virusKeyboardVisible ? kVirusKeyboardExtraHeight : 0),
-                                     kVirusTemplateWidth,
-                                     kVirusTemplateHeight + (virusKeyboardVisible ? kVirusKeyboardExtraHeight : 0));
-                    setSize (kVirusTemplateWidth, kVirusTemplateHeight + (virusKeyboardVisible ? kVirusKeyboardExtraHeight : 0));
-                    resized();
-                    repaint();
-                }
-            };
-            addAndMakeVisible (*virusKeyboardToggle);
-        }
-
-        if (virusKeyboard == nullptr)
-        {
-            virusKeyboard = std::make_unique<juce::MidiKeyboardComponent> (audioProcessor.getKeyboardState(),
-                                                                           juce::MidiKeyboardComponent::horizontalKeyboard);
-            virusKeyboard->setKeyWidth (18.0f);
-            virusKeyboard->setAvailableRange (24, 96);
-            virusKeyboard->setWantsKeyboardFocus (false);
-            virusKeyboard->setScrollButtonsVisible (false);
-            virusKeyboard->setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour::fromRGB (232, 236, 242));
-            virusKeyboard->setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour::fromRGB (34, 38, 44));
-            virusKeyboard->setColour (juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour::fromRGB (92, 102, 118));
-            virusKeyboard->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, theme.accent.withAlpha (0.22f));
-            virusKeyboard->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, theme.accent.withAlpha (0.52f));
-            addAndMakeVisible (*virusKeyboard);
-        }
-
-        virusKeyboardToggle->setToggleState (virusKeyboardVisible, juce::dontSendNotification);
-        virusKeyboardToggle->setVisible (true);
-        virusKeyboard->setVisible (virusKeyboardVisible);
+                previewKeyboardVisible = previewKeyboardToggle->getToggleState();
+                if (previewKeyboard != nullptr)
+                    previewKeyboard->setVisible (previewKeyboardVisible);
+                updateEditorSizeForPreviewKeyboard();
+                repaint();
+            }
+        };
+        addAndMakeVisible (*previewKeyboardToggle);
     }
+
+    if (previewKeyboard == nullptr)
+    {
+        previewKeyboard = std::make_unique<juce::MidiKeyboardComponent> (audioProcessor.getKeyboardState(),
+                                                                         juce::MidiKeyboardComponent::horizontalKeyboard);
+        previewKeyboard->setKeyWidth (18.0f);
+        previewKeyboard->setAvailableRange (24, 96);
+        previewKeyboard->setWantsKeyboardFocus (false);
+        previewKeyboard->setScrollButtonsVisible (false);
+        previewKeyboard->setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour::fromRGB (232, 236, 242));
+        previewKeyboard->setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour::fromRGB (34, 38, 44));
+        previewKeyboard->setColour (juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour::fromRGB (92, 102, 118));
+        previewKeyboard->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, theme.accent.withAlpha (0.22f));
+        previewKeyboard->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, theme.accent.withAlpha (0.52f));
+        addAndMakeVisible (*previewKeyboard);
+    }
+
+    previewKeyboardToggle->setToggleState (previewKeyboardVisible, juce::dontSendNotification);
+    previewKeyboardToggle->setVisible (true);
+    previewKeyboard->setVisible (previewKeyboardVisible);
 }
 
 bool AdvancedVSTiAudioProcessorEditor::isTribute303() const noexcept
@@ -1894,6 +1893,29 @@ bool AdvancedVSTiAudioProcessorEditor::usesDrumPadLayout() const noexcept
 bool AdvancedVSTiAudioProcessorEditor::usesFixedInstrumentLayout() const noexcept
 {
     return ! isTribute303() && ! isTributeVirus() && ! audioProcessor.isExternalPadFlavor();
+}
+
+void AdvancedVSTiAudioProcessorEditor::updateEditorSizeForPreviewKeyboard()
+{
+    const auto previewExtraHeight = previewKeyboardVisible ? kPreviewKeyboardExtraHeight : 0;
+    const auto deltaHeight = previewExtraHeight - appliedPreviewKeyboardExtraHeight;
+    appliedPreviewKeyboardExtraHeight = previewExtraHeight;
+
+    setResizeLimits (editorBaseMinWidth,
+                     editorBaseMinHeight + previewExtraHeight,
+                     editorBaseMaxWidth,
+                     editorBaseMaxHeight + previewExtraHeight);
+
+    const auto currentWidth = getWidth() > 0 ? getWidth() : editorBaseDefaultWidth;
+    const auto currentHeight = getHeight() > 0 ? getHeight() : editorBaseDefaultHeight;
+    const auto targetWidth = juce::jlimit (editorBaseMinWidth, editorBaseMaxWidth, currentWidth);
+    const auto targetHeight = editorBaseResizable
+                                  ? juce::jlimit (editorBaseMinHeight + previewExtraHeight,
+                                                  editorBaseMaxHeight + previewExtraHeight,
+                                                  currentHeight + deltaHeight)
+                                  : (editorBaseDefaultHeight + previewExtraHeight);
+
+    setSize (targetWidth, targetHeight);
 }
 
 void AdvancedVSTiAudioProcessorEditor::timerCallback()
@@ -4095,6 +4117,12 @@ AdvancedVSTiAudioProcessorEditor::Theme AdvancedVSTiAudioProcessorEditor::buildT
                  juce::Colour::fromRGB (18, 22, 16), juce::Colour::fromRGB (25, 31, 23), juce::Colour::fromRGB (62, 99, 46),
                  juce::Colours::white, juce::Colour::fromRGB (203, 219, 193) };
 
+    if (name.contains ("choir"))
+        return { "AI Choir", "Layered chamber-to-cathedral choir voicing with smooth bloom, vowel focus, and restrained ambient width.",
+                 juce::Colour::fromRGB (223, 188, 245), juce::Colour::fromRGB (154, 102, 194),
+                 juce::Colour::fromRGB (18, 17, 24), juce::Colour::fromRGB (28, 24, 36), juce::Colour::fromRGB (92, 70, 118),
+                 juce::Colours::white, juce::Colour::fromRGB (216, 204, 232) };
+
     if (name.contains ("bass"))
         return { "AI Bass Synth", "Heavier subs, firmer harmonics, and a darker panel built for low-end shaping.",
                  juce::Colour::fromRGB (82, 231, 166), juce::Colour::fromRGB (24, 153, 111),
@@ -4236,6 +4264,14 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
         specs.push_back ({ "SAMPLEBANK", "Source", "Pipe organ stop profile", { "Cathedral Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" }, {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Upper harmonic contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Brightness roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
+        return specs;
+    }
+
+    if (name.contains ("choir"))
+    {
+        specs.push_back ({ "SAMPLEBANK", "Source", "Choir section and vowel profile", { "Mixed Chorus", "Large Chorus", "Soft Aahs", "Cathedral Oohs" }, {}, false, 0 });
+        specs.push_back ({ "FILTERTYPE", "Filter", "Body / air contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
+        specs.push_back ({ "FILTERSLOPE", "Slope", "Upper-harmonic roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
     }
 
@@ -4499,6 +4535,16 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "FXINTENSITY", "Depth", "Rotary / chorus depth" },
             { "AMPRELEASE", "Release", "Key-off tail" },
             { "REVERBMIX", "Room", "Cabinet / hall space" },
+        };
+
+    if (name.contains ("choir"))
+        return {
+            { "CUTOFF", "Tone", "Section brightness" },
+            { "RESONANCE", "Formant", "Vowel focus" },
+            { "AMPATTACK", "Attack", "Pad bloom" },
+            { "AMPRELEASE", "Release", "Choir tail" },
+            { "LFO1PITCH", "Vibrato", "Pitch motion" },
+            { "REVERBMIX", "Room", "Hall depth" },
         };
 
     if (name.contains ("bass"))
@@ -4769,23 +4815,32 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
 
     if (isTribute909() && ! usesFixedInstrumentLayout())
     {
+        auto displayBounds = getLocalBounds();
+        if (previewKeyboardVisible)
+        {
+            g.setColour (theme.faceplate);
+            g.fillRect (displayBounds);
+            displayBounds.removeFromBottom (kPreviewKeyboardExtraHeight);
+        }
+
         if (backgroundImage.isValid())
         {
-            g.drawImage (backgroundImage, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
+            g.drawImage (backgroundImage, displayBounds.toFloat(), juce::RectanglePlacement::stretchToFit);
             return;
         }
 
-        const auto uiScale = juce::jlimit (0.72f, 1.45f, juce::jmin (getWidth() / 1120.0f, getHeight() / 640.0f));
+        const auto uiScale = juce::jlimit (0.72f, 1.45f, juce::jmin (displayBounds.getWidth() / 1120.0f,
+                                                                     displayBounds.getHeight() / 640.0f));
         const auto s = [uiScale] (float value) { return scaledFloat (value, uiScale); };
         const auto si = [uiScale] (float value) { return scaledInt (value, uiScale); };
-        auto bounds = getLocalBounds().toFloat();
+        auto bounds = displayBounds.toFloat();
         juce::ColourGradient faceplate (theme.faceplate.brighter (0.03f), bounds.getTopLeft(),
                                         theme.faceplate.darker (0.08f), bounds.getBottomRight(), false);
         g.setGradientFill (faceplate);
-        g.fillAll();
+        g.fillRect (displayBounds);
 
         g.setColour (juce::Colours::white.withAlpha (0.38f));
-        g.drawRect (getLocalBounds().reduced (1), 1);
+        g.drawRect (displayBounds.reduced (1), 1);
 
         auto frame = bounds.reduced (s (12.0f));
         g.setColour (theme.trim.withAlpha (0.8f));
@@ -5521,9 +5576,31 @@ void AdvancedVSTiAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
 
 void AdvancedVSTiAudioProcessorEditor::resized()
 {
+    auto contentBounds = getLocalBounds();
+    if (previewKeyboardVisible)
+        contentBounds.removeFromBottom (kPreviewKeyboardExtraHeight);
+
+    auto layoutPreviewKeyboard = [this] ()
+    {
+        if (previewKeyboard == nullptr)
+            return;
+
+        if (previewKeyboardVisible)
+            previewKeyboard->setBounds (12, getHeight() - kPreviewKeyboardExtraHeight + 8, getWidth() - 24, kPreviewKeyboardExtraHeight - 18);
+        else
+            previewKeyboard->setBounds ({});
+    };
+
+    if (previewKeyboardToggle != nullptr)
+    {
+        previewKeyboardToggle->setScale (0.82f);
+        previewKeyboardToggle->setBounds (getWidth() - 36, 8, 28, 16);
+    }
+
     if (isTribute303())
     {
-        const auto uiScale = juce::jlimit (0.75f, 1.6f, juce::jmin (getWidth() / 1020.0f, getHeight() / 430.0f));
+        const auto uiScale = juce::jlimit (0.75f, 1.6f, juce::jmin (contentBounds.getWidth() / 1020.0f,
+                                                                     contentBounds.getHeight() / 430.0f));
         const auto s = [uiScale] (float value) { return scaledInt (value, uiScale); };
         badgeLabel.setFont (juce::Font (11.0f * uiScale, juce::Font::bold));
         titleLabel.setFont (juce::Font (30.0f * uiScale, juce::Font::bold));
@@ -5533,7 +5610,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         for (auto* card : choiceCards)
             card->setScale (uiScale);
 
-        auto area = getLocalBounds().reduced (s (28.0f));
+        auto area = contentBounds.reduced (s (28.0f));
         auto hero = area.removeFromTop (s (84.0f));
 
         auto titleArea = hero.removeFromLeft (juce::jmin (s (460.0f), juce::jmax (s (340.0f), hero.getWidth() - s (220.0f))));
@@ -5566,6 +5643,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             card->setBounds (x, area.getY(), cardWidth, cardHeight);
             x += cardWidth + spacing;
         }
+        layoutPreviewKeyboard();
         return;
     }
 
@@ -5625,10 +5703,12 @@ void AdvancedVSTiAudioProcessorEditor::resized()
                 if (juce::isPositiveAndBelow (idx, knobCards.size()))
                     knobCards[idx]->setBounds ({});
 
+            layoutPreviewKeyboard();
             return;
         }
 
-        const auto uiScale = juce::jlimit (0.72f, 1.45f, juce::jmin (getWidth() / 1120.0f, getHeight() / 640.0f));
+        const auto uiScale = juce::jlimit (0.72f, 1.45f, juce::jmin (contentBounds.getWidth() / 1120.0f,
+                                                                     contentBounds.getHeight() / 640.0f));
         const auto s = [uiScale] (float value) { return scaledInt (value, uiScale); };
         badgeLabel.setFont (juce::Font (11.0f * uiScale, juce::Font::bold));
         titleLabel.setFont (juce::Font (28.0f * uiScale, juce::Font::bold));
@@ -5639,7 +5719,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             card->setScale (uiScale);
 
         // Match paint() coordinate system exactly
-        auto frame = getLocalBounds().reduced (s (12.0f));
+        auto frame = contentBounds.reduced (s (12.0f));
         auto hero = frame.removeFromTop (s (82.0f));
 
         // Paint draws "TR-909" and "RHYTHM COMPOSER" in top 38px of hero;
@@ -5743,6 +5823,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         for (auto* pad : drumPads)
             pad->setBounds ({});
 
+        layoutPreviewKeyboard();
         return;
     }
 
@@ -5752,11 +5833,6 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             card->setScale (1.0f);
         for (auto* card : choiceCards)
             card->setScale (1.0f);
-        if (virusKeyboardToggle != nullptr)
-        {
-            virusKeyboardToggle->setScale (0.82f);
-            virusKeyboardToggle->setBounds (8, 8, 28, 16);
-        }
 
         badgeLabel.setBounds ({});
         titleLabel.setBounds ({});
@@ -5955,23 +6031,11 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         placeVirusPanelButton ("filter2ModeBp", { 918, 174, 12, 10 });
         placeVirusPanelButton ("filter2ModeBs", { 918, 188, 12, 10 });
 
-        if (virusKeyboard != nullptr)
-        {
-            if (virusKeyboardVisible)
-                virusKeyboard->setBounds (12, kVirusTemplateHeight + 8, getWidth() - 24, kVirusKeyboardExtraHeight - 18);
-            else
-                virusKeyboard->setBounds ({});
-        }
-
+        layoutPreviewKeyboard();
         for (auto* pad : drumPads)
             pad->setBounds ({});
         return;
     }
-
-    if (virusKeyboardToggle != nullptr)
-        virusKeyboardToggle->setBounds ({});
-    if (virusKeyboard != nullptr)
-        virusKeyboard->setBounds ({});
 
     if (usesFixedInstrumentLayout())
     {
@@ -5984,7 +6048,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         }
 
         const bool drumFixedLayout = isTribute909();
-        auto area = getLocalBounds().reduced (kFixedInstrumentOuterPadding);
+        auto area = contentBounds.reduced (kFixedInstrumentOuterPadding);
         auto hero = area.removeFromTop (drumFixedLayout ? kFixedDrumHeroHeight : kFixedInstrumentHeroHeight);
         badgeLabel.setFont (juce::Font (drumFixedLayout ? 11.0f : 12.0f, juce::Font::bold));
         titleLabel.setFont (juce::Font (drumFixedLayout ? 24.0f : 28.0f, juce::Font::bold));
@@ -6083,6 +6147,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             layoutSection ({ row3X + rimClapWidth + hatWidth + cymbalWidth + (kFixedDrumSectionGap * 3), row3Y, percWidth, kFixedDrumSectionHeight }, { 31, 32, 33, 34 });
 
             clearUnused();
+            layoutPreviewKeyboard();
             return;
         }
 
@@ -6111,6 +6176,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
 
         for (auto* pad : drumPads)
             pad->setBounds ({});
+        layoutPreviewKeyboard();
         return;
     }
 
@@ -6118,8 +6184,10 @@ void AdvancedVSTiAudioProcessorEditor::resized()
     {
         const bool vecPadLayout = audioProcessor.isExternalPadFlavor();
         const auto uiScale = vecPadLayout
-                                 ? juce::jlimit (0.72f, 1.15f, juce::jmin (getWidth() / 1280.0f, getHeight() / 900.0f))
-                                 : juce::jlimit (0.8f, 1.4f, juce::jmin (getWidth() / 1180.0f, getHeight() / 860.0f));
+                                 ? juce::jlimit (0.72f, 1.15f, juce::jmin (contentBounds.getWidth() / 1280.0f,
+                                                                            contentBounds.getHeight() / 900.0f))
+                                 : juce::jlimit (0.8f, 1.4f, juce::jmin (contentBounds.getWidth() / 1180.0f,
+                                                                          contentBounds.getHeight() / 860.0f));
         badgeLabel.setFont (juce::Font ((vecPadLayout ? 10.0f : 11.0f) * uiScale, juce::Font::bold));
         titleLabel.setFont (juce::Font ((vecPadLayout ? 24.0f : 28.0f) * uiScale, juce::Font::bold));
         subtitleLabel.setFont (juce::Font ((vecPadLayout ? 11.5f : 13.0f) * uiScale, juce::Font::plain));
@@ -6128,7 +6196,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         for (auto* card : choiceCards)
             card->setScale (uiScale);
 
-        auto area = getLocalBounds().reduced (isTribute909() ? 26 : (vecPadLayout ? 18 : 22));
+        auto area = contentBounds.reduced (isTribute909() ? 26 : (vecPadLayout ? 18 : 22));
         auto hero = area.removeFromTop (isTribute909() ? 88 : (vecPadLayout ? 82 : 96));
         badgeLabel.setBounds (hero.removeFromTop (18));
         titleLabel.setBounds (hero.removeFromTop (isTribute909() ? 40 : (vecPadLayout ? 32 : 36)));
@@ -6194,11 +6262,13 @@ void AdvancedVSTiAudioProcessorEditor::resized()
                 x += padWidth + spacing;
             }
         }
+        layoutPreviewKeyboard();
         return;
     }
 
-    auto area = getLocalBounds().reduced (22);
-    const auto uiScale = juce::jlimit (0.8f, 1.4f, juce::jmin (getWidth() / 1040.0f, getHeight() / 640.0f));
+    auto area = contentBounds.reduced (22);
+    const auto uiScale = juce::jlimit (0.8f, 1.4f, juce::jmin (contentBounds.getWidth() / 1040.0f,
+                                                               contentBounds.getHeight() / 640.0f));
     badgeLabel.setFont (juce::Font (12.0f * uiScale, juce::Font::bold));
     titleLabel.setFont (juce::Font (28.0f * uiScale, juce::Font::bold));
     subtitleLabel.setFont (juce::Font (13.0f * uiScale, juce::Font::plain));
@@ -6253,4 +6323,5 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             x += cardWidth + spacing;
         }
     }
+    layoutPreviewKeyboard();
 }

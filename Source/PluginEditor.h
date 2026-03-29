@@ -232,6 +232,7 @@ private:
     [[nodiscard]] bool isTributeVirus() const noexcept;
     [[nodiscard]] bool usesDrumPadLayout() const noexcept;
     [[nodiscard]] bool usesFixedInstrumentLayout() const noexcept;
+    void updateEditorSizeForPreviewKeyboard();
     void syncExternalPadDisplays();
     void showFixedInstrumentOsdForParam (const juce::String& paramId,
                                          const juce::String& titleOverride = {},
@@ -282,10 +283,18 @@ private:
     juce::OwnedArray<DrumPad> drumPads;
     juce::OwnedArray<LedToggleButton> virusPanelButtons;
     std::vector<juce::String> virusPanelButtonKeys;
-    std::unique_ptr<LedToggleButton> virusKeyboardToggle;
-    std::unique_ptr<juce::MidiKeyboardComponent> virusKeyboard;
+    std::unique_ptr<LedToggleButton> previewKeyboardToggle;
+    std::unique_ptr<juce::MidiKeyboardComponent> previewKeyboard;
     juce::Image backgroundImage;
-    bool virusKeyboardVisible = false;
+    bool previewKeyboardVisible = false;
+    bool editorBaseResizable = true;
+    int editorBaseDefaultWidth = 1040;
+    int editorBaseDefaultHeight = 640;
+    int editorBaseMinWidth = 820;
+    int editorBaseMinHeight = 520;
+    int editorBaseMaxWidth = 2200;
+    int editorBaseMaxHeight = 1600;
+    int appliedPreviewKeyboardExtraHeight = 0;
     int virusMatrixSlotIndex = 0;
     int virusMatrixTargetIndex = 0;
     int virusModulatorIndex = 0;

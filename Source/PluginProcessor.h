@@ -101,7 +101,8 @@ private:
         flute,
         saxophone,
         bassGuitar,
-        organ
+        organ,
+        choir
     };
 
     static constexpr int drumVoiceLevelCount = 15;
@@ -547,6 +548,8 @@ private:
         return InstrumentFlavor::organ;
 #elif AIMS_INSTRUMENT_FLAVOR == 18
         return InstrumentFlavor::vve1VocalPad;
+#elif AIMS_INSTRUMENT_FLAVOR == 19
+        return InstrumentFlavor::choir;
 #else
         return InstrumentFlavor::advanced;
 #endif
@@ -588,7 +591,8 @@ private:
                || buildFlavor() == InstrumentFlavor::flute
                || buildFlavor() == InstrumentFlavor::saxophone
                || buildFlavor() == InstrumentFlavor::bassGuitar
-               || buildFlavor() == InstrumentFlavor::organ;
+               || buildFlavor() == InstrumentFlavor::organ
+               || buildFlavor() == InstrumentFlavor::choir;
     }
 
     [[nodiscard]] static constexpr bool supportsOffFilterChoice() noexcept
@@ -638,6 +642,8 @@ private:
             return 1;
         else if constexpr (buildFlavor() == InstrumentFlavor::organ)
             return 16;
+        else if constexpr (buildFlavor() == InstrumentFlavor::choir)
+            return 8;
         else if constexpr (buildFlavor() == InstrumentFlavor::advanced)
             return 8;
         else

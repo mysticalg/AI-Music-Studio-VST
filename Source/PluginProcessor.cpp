@@ -1948,6 +1948,8 @@ juce::StringArray AdvancedVSTiAudioProcessor::sampleBankChoices()
         return { "Finger Bass", "Pick Bass", "Muted Bass", "Round Bass" };
     if constexpr (buildFlavor() == InstrumentFlavor::organ)
         return { "Cathedral Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" };
+    if constexpr (buildFlavor() == InstrumentFlavor::choir)
+        return { "Mixed Chorus", "Large Chorus", "Soft Aahs", "Cathedral Oohs" };
     return { "Dusty Keys", "Tape Choir", "Velvet Pluck", "Vox Chop", "Sub Stab", "Glass Bell" };
 }
 
@@ -1995,6 +1997,8 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
         return { "Finger Bass", "Pick Bass", "Muted Bass", "Round Bass" };
     if constexpr (buildFlavor() == InstrumentFlavor::organ)
         return { "Cathedral Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" };
+    if constexpr (buildFlavor() == InstrumentFlavor::choir)
+        return { "Mixed Chorus", "Large Chorus", "Soft Aahs", "Cathedral Oohs" };
 
     auto names = builtInAdvancedVirusPresetChoices();
     for (const auto& imported : importedVirusPresets())
@@ -2444,6 +2448,18 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
         if constexpr (buildFlavor() == InstrumentFlavor::organ)
         {
             return "Organ/ChurchOrganEmulation-SFZ-20190924/ChurchOrganEmulation-20190924.sfz";
+        }
+        if constexpr (buildFlavor() == InstrumentFlavor::choir)
+        {
+            switch (clampedBank)
+            {
+                case 1:
+                case 3:
+                    return "Sonatina Symphonic Orchestra/Chorus - Performance/Large Chorus.sfz";
+                case 2:
+                default:
+                    return "Sonatina Symphonic Orchestra/Chorus - Performance/Mixed Chorus.sfz";
+            }
         }
         return {};
     }();
@@ -3434,6 +3450,77 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
                            + (std::sin (twoPi * phaseE) * h5);
             sample = (sample * 0.42f) + (noise * click * std::exp (-t * 58.0f));
             return softSaturate (sample * 1.1f) * attack * release;
+        });
+        return;
+    }
+
+    if constexpr (buildFlavor() == InstrumentFlavor::choir)
+    {
+        float brightness = 0.84f;
+        float breath = 0.1f;
+        float vibrato = 0.0032f;
+        float altoBlend = 0.22f;
+        float room = 0.08f;
+        float darken = 0.0f;
+        float acousticLengthSec = 5.8f;
+
+        switch (bankIndex)
+        {
+            case 1:
+                brightness = 0.72f;
+                breath = 0.08f;
+                vibrato = 0.0028f;
+                altoBlend = 0.3f;
+                room = 0.12f;
+                acousticLengthSec = 6.6f;
+                break;
+            case 2:
+                brightness = 0.96f;
+                breath = 0.15f;
+                vibrato = 0.0042f;
+                altoBlend = 0.4f;
+                room = 0.06f;
+                acousticLengthSec = 5.1f;
+                break;
+            case 3:
+                brightness = 0.62f;
+                breath = 0.07f;
+                vibrato = 0.0024f;
+                altoBlend = 0.18f;
+                room = 0.18f;
+                darken = 1.0f;
+                acousticLengthSec = 7.2f;
+                break;
+            default:
+                break;
+        }
+
+        renderAcousticBank (acousticLengthSec, [&] (float t, float noise, float& phaseA, float& phaseB, float& phaseC, float& phaseD,
+                                                    float& phaseE, float& phaseF, float& stateA, float& stateB)
+        {
+            phaseE = std::fmod (phaseE + ((0.19f + room * 0.12f) / sampleRateF), 1.0f);
+            phaseF = std::fmod (phaseF + ((4.6f + breath * 1.4f - darken * 0.45f) / sampleRateF), 1.0f);
+            const auto attack = juce::jlimit (0.0f, 1.0f, t / (0.14f + room * 0.22f + darken * 0.12f));
+            const auto swell = darken > 0.5f ? juce::jlimit (0.0f, 1.0f, t / 0.72f) : attack;
+            const auto release = std::exp (-juce::jmax (0.0f, t - (acousticLengthSec - (darken > 0.5f ? 1.2f : 0.9f)))
+                                           * (darken > 0.5f ? 1.5f : 2.1f));
+            const auto vib = std::sin (twoPi * phaseF) * vibrato * (0.2f + 0.8f * swell);
+            phaseA = std::fmod (phaseA + ((261.6256f * (1.0f + vib)) / sampleRateF), 1.0f);
+            phaseB = std::fmod (phaseB + ((261.6256f * 2.0f * (1.0f + vib * 0.45f)) / sampleRateF), 1.0f);
+            phaseC = std::fmod (phaseC + ((261.6256f * 3.01f * (1.0f + vib * 0.2f)) / sampleRateF), 1.0f);
+            phaseD = std::fmod (phaseD + ((261.6256f * 0.5f) / sampleRateF), 1.0f);
+            stateA += (noise - stateA) * (0.02f + breath * 0.03f);
+
+            const auto width = std::sin (twoPi * phaseE) * (0.008f + altoBlend * 0.02f + room * 0.01f);
+            float sample = (std::sin (twoPi * std::fmod (phaseA + width, 1.0f)) * 0.48f)
+                           + (std::sin (twoPi * std::fmod (phaseB - width * 0.55f + 0.11f, 1.0f)) * 0.18f * brightness)
+                           + (std::sin (twoPi * std::fmod ((phaseA * 1.5f) + width * 0.35f + 0.27f, 1.0f)) * altoBlend)
+                           + (std::sin (twoPi * std::fmod (phaseC + 0.06f, 1.0f)) * 0.08f * (0.76f + brightness * 0.3f))
+                           + (std::sin (twoPi * std::fmod (phaseD + 0.19f, 1.0f)) * (0.1f + room * 0.08f));
+            sample += stateA * breath;
+            sample += noise * (0.07f + breath * 0.06f) * std::exp (-t * (darken > 0.5f ? 24.0f : 34.0f));
+            sample = smoothTowards (sample, 0.022f + room * 0.012f, stateB);
+            return softSaturate (sample * (0.98f + altoBlend * 0.1f + room * 0.06f)) * swell * release;
         });
         return;
     }
@@ -5255,6 +5342,91 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
                 * 0.96f;
         }
     }
+    else if constexpr (buildFlavor() == InstrumentFlavor::choir)
+    {
+        const auto largeBank = params.sampleBank == 1;
+        const auto airyBank = params.sampleBank == 2;
+        const auto cathedralBank = params.sampleBank == 3;
+        const auto toneMacro = normalizedLogValue (params.cutoff, 320.0f, 12000.0f);
+        const auto formantMacro = juce::jlimit (0.0f, 1.0f, params.resonance * 1.7f);
+        const auto vibratoMacro = std::sqrt (juce::jlimit (0.0f, 1.0f, params.lfo1Pitch / 24.0f));
+        const auto ensembleMacro = juce::jlimit (0.0f, 1.0f, params.fxMix);
+        const auto roomMacro = juce::jlimit (0.0f, 1.0f, params.reverbMix);
+        const auto attackBlend = juce::jlimit (0.0f,
+                                               1.0f,
+                                               voice.noteAge / (cathedralBank ? 0.34f : (largeBank ? 0.24f : 0.16f)));
+        const auto vibratoRamp = std::pow (juce::jlimit (0.0f,
+                                                         1.0f,
+                                                         (voice.noteAge - (airyBank ? 0.08f : 0.14f))
+                                                             / (cathedralBank ? 0.62f : 0.34f)),
+                                           1.35f);
+        voice.auxPhase = std::fmod (voice.auxPhase + ((cathedralBank ? 4.2f : (airyBank ? 5.4f : 4.8f))
+                                                      / static_cast<float> (currentSampleRate)),
+                                    1.0f);
+        const auto vibrato = std::sin (twoPi * voice.auxPhase)
+                             * (0.0008f + voice.velocity * (airyBank ? 0.0032f : 0.0024f))
+                             * (0.45f + vibratoMacro * 2.8f)
+                             * vibratoRamp;
+        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (airyBank ? 0.12f : 0.08f),
+                                           airyBank ? 0.035f : 0.024f,
+                                           voice.colourState);
+        const auto soprano = std::sin (twoPi * std::fmod ((voice.phase * 2.0f) + vibrato + 0.13f, 1.0f))
+                             * (airyBank ? 0.06f : 0.04f);
+        const auto alto = std::sin (twoPi * std::fmod ((voice.phase * 1.5f) + (vibrato * 0.4f) + 0.31f, 1.0f))
+                          * (largeBank ? 0.048f : 0.04f);
+        const auto tenor = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + 0.21f, 1.0f))
+                           * (cathedralBank ? 0.09f : 0.06f);
+        const auto breath = voice.colourState * (airyBank ? 0.22f : (cathedralBank ? 0.1f : 0.14f));
+        const auto consonant = (random.nextFloat() * 2.0f - 1.0f)
+                               * (0.06f + voice.velocity * 0.05f + (airyBank ? 0.04f : 0.0f))
+                               * std::exp (-voice.noteAge * (airyBank ? 44.0f : 30.0f));
+        const auto halo = std::sin (twoPi * std::fmod ((voice.phase * 0.25f) + (voice.auxPhase * 0.016f), 1.0f))
+                          * (cathedralBank ? 0.08f : 0.04f);
+        const auto releaseHalo = releaseHint * (0.05f + roomMacro * 0.1f + (cathedralBank ? 0.06f : 0.0f));
+        const auto bodyTrack = smoothTowards (s, 0.008f + ((1.0f - toneMacro) * 0.035f), voice.toneState);
+        const auto edge = s - bodyTrack;
+        const auto formantTrack = smoothTowards (edge, 0.014f + (formantMacro * 0.13f), voice.articulationState);
+        const auto toneTilt = (bodyTrack * juce::jmap (toneMacro, 1.12f, 0.82f))
+                              + (edge * juce::jmap (toneMacro, 0.22f, 2.7f));
+        const auto formant = formantTrack * (0.12f + formantMacro * (airyBank ? 1.45f : (cathedralBank ? 1.2f : 1.3f)))
+                             + (std::sin (twoPi * std::fmod ((voice.phase * (2.6f + formantMacro * 0.7f))
+                                                             + 0.17f
+                                                             + (vibrato * 0.35f),
+                                                            1.0f))
+                                * (0.02f + formantMacro * 0.08f));
+        const auto choirCore = toneTilt
+                               + (soprano * (0.45f + ensembleMacro * 0.2f))
+                               + (alto * (0.6f + ensembleMacro * 0.3f))
+                               + (tenor * (0.7f + roomMacro * 0.45f))
+                               + breath
+                               + consonant
+                               + formant
+                               + halo
+                               + releaseHalo;
+
+        if (useInstrumentMultisample)
+        {
+            s = softSaturate (choirCore * (0.98f
+                                           + ensembleMacro * 0.14f
+                                           + roomMacro * 0.08f
+                                           + formantMacro * 0.16f))
+                * (cathedralBank ? 0.985f : 0.99f)
+                * attackBlend;
+        }
+        else
+        {
+            s = softSaturate (((choirCore * 0.86f)
+                               + (soprano * 0.24f)
+                               + (alto * 0.22f)
+                               + (tenor * 0.28f))
+                              * (1.08f
+                                 + ensembleMacro * 0.24f
+                                 + roomMacro * 0.14f
+                                 + formantMacro * 0.18f))
+                * 0.94f
+                * attackBlend;
+        }
+    }
     else if constexpr (buildFlavor() == InstrumentFlavor::acid303)
     {
         const auto saw = (2.0f * voice.phase) - 1.0f;
@@ -6757,6 +6929,34 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         lfo1RateDefault = 0.04f;
         lfo2RateDefault = 0.03f;
     }
+    else if constexpr (buildFlavor() == InstrumentFlavor::choir)
+    {
+        oscDefault = 4;
+        unisonDefault = 1;
+        detuneDefault = 0.0f;
+        gateDefault = 8.0f;
+        ampAttackDefault = 0.14f;
+        ampDecayDefault = 0.6f;
+        ampSustainDefault = 0.94f;
+        ampReleaseDefault = 1.2f;
+        filtAttackDefault = 0.08f;
+        filtDecayDefault = 0.54f;
+        filtSustainDefault = 0.82f;
+        filtReleaseDefault = 1.02f;
+        envCurveDefault = 0.04f;
+        filterTypeDefault = 1;
+        cutoffDefault = 3200.0f;
+        resonanceDefault = 0.16f;
+        filterEnvAmountDefault = 0.1f;
+        sampleEndDefault = 0.98f;
+        fxTypeDefault = 3;
+        fxMixDefault = 0.16f;
+        fxIntensityDefault = 0.2f;
+        reverbMixDefault = 0.2f;
+        delaySendDefault = 0.03f;
+        lfo1RateDefault = 0.08f;
+        lfo2RateDefault = 0.05f;
+    }
     else if constexpr (buildFlavor() == InstrumentFlavor::acid303)
     {
         oscDefault = 1;
@@ -7920,6 +8120,59 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("CUTOFF", 7600.0f);
                 setParameterActual ("FXMIX", 0.12f);
                 setParameterActual ("REVERBMIX", 0.14f);
+                break;
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::choir)
+    {
+        setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
+        setParameterActual ("FILTERTYPE", 1.0f);
+        switch (presetIndex)
+        {
+            case 1:
+                setParameterActual ("UNISON", 2.0f);
+                setParameterActual ("CUTOFF", 2600.0f);
+                setParameterActual ("RESONANCE", 0.14f);
+                setParameterActual ("AMPATTACK", 0.22f);
+                setParameterActual ("AMPRELEASE", 1.8f);
+                setParameterActual ("LFO1PITCH", 0.14f);
+                setParameterActual ("FXMIX", 0.22f);
+                setParameterActual ("REVERBMIX", 0.28f);
+                setParameterActual ("DELAYSEND", 0.04f);
+                break;
+            case 2:
+                setParameterActual ("UNISON", 1.0f);
+                setParameterActual ("CUTOFF", 4200.0f);
+                setParameterActual ("RESONANCE", 0.24f);
+                setParameterActual ("AMPATTACK", 0.08f);
+                setParameterActual ("AMPRELEASE", 1.0f);
+                setParameterActual ("FILTERENVAMOUNT", 0.14f);
+                setParameterActual ("LFO1PITCH", 0.18f);
+                setParameterActual ("FXMIX", 0.1f);
+                setParameterActual ("REVERBMIX", 0.2f);
+                break;
+            case 3:
+                setParameterActual ("UNISON", 2.0f);
+                setParameterActual ("CUTOFF", 2400.0f);
+                setParameterActual ("RESONANCE", 0.12f);
+                setParameterActual ("AMPATTACK", 0.3f);
+                setParameterActual ("AMPRELEASE", 2.4f);
+                setParameterActual ("FILTERENVAMOUNT", 0.06f);
+                setParameterActual ("LFO1PITCH", 0.08f);
+                setParameterActual ("FXMIX", 0.18f);
+                setParameterActual ("FXINTENSITY", 0.26f);
+                setParameterActual ("DELAYSEND", 0.06f);
+                setParameterActual ("REVERBMIX", 0.34f);
+                break;
+            default:
+                setParameterActual ("UNISON", 1.0f);
+                setParameterActual ("CUTOFF", 3200.0f);
+                setParameterActual ("RESONANCE", 0.16f);
+                setParameterActual ("AMPATTACK", 0.14f);
+                setParameterActual ("AMPRELEASE", 1.2f);
+                setParameterActual ("LFO1PITCH", 0.12f);
+                setParameterActual ("FXMIX", 0.16f);
+                setParameterActual ("REVERBMIX", 0.2f);
                 break;
         }
     }
