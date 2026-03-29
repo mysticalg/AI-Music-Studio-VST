@@ -278,12 +278,9 @@ private:
     juce::OwnedArray<DrumPad> drumPads;
     juce::OwnedArray<LedToggleButton> virusPanelButtons;
     std::vector<juce::String> virusPanelButtonKeys;
-    std::unique_ptr<LedToggleButton> virusBackgroundToggle;
     std::unique_ptr<LedToggleButton> virusKeyboardToggle;
     std::unique_ptr<juce::MidiKeyboardComponent> virusKeyboard;
-    juce::Image virusTemplateImage;
     juce::Image backgroundImage;
-    bool virusShowBackground = true;
     bool virusKeyboardVisible = false;
     int virusMatrixSlotIndex = 0;
     int virusMatrixTargetIndex = 0;

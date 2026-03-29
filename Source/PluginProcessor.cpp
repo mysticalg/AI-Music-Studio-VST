@@ -762,6 +762,11 @@ juce::File pianoLibraryRoot()
     if (cachedRoot.isDirectory())
         return cachedRoot;
 
+    const auto parentRepoRoot = repoRoot.getParentDirectory().getParentDirectory();
+    const auto parentCachedRoot = parentRepoRoot.getChildFile (".cache").getChildFile ("SplendidGrandPiano");
+    if (parentCachedRoot.isDirectory())
+        return parentCachedRoot;
+
     return {};
 }
 
@@ -775,6 +780,11 @@ juce::File openInstrumentSamplesRoot()
     const auto cachedRoot = repoRoot.getChildFile (".cache").getChildFile ("OpenInstrumentSamples");
     if (cachedRoot.isDirectory())
         return cachedRoot;
+
+    const auto parentRepoRoot = repoRoot.getParentDirectory().getParentDirectory();
+    const auto parentCachedRoot = parentRepoRoot.getChildFile (".cache").getChildFile ("OpenInstrumentSamples");
+    if (parentCachedRoot.isDirectory())
+        return parentCachedRoot;
 
     return {};
 }

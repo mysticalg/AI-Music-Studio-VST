@@ -1435,8 +1435,6 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
 {
     if (isTributeVirus())
     {
-        virusTemplateImage = juce::ImageCache::getFromMemory (BinaryData::virus_jpg, BinaryData::virus_jpgSize);
-        virusShowBackground = virusTemplateImage.isValid();
         startTimerHz (15);
     }
     else if (audioProcessor.isVec1DrumPadFlavor())
@@ -1667,22 +1665,6 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
 
     if (isTributeVirus())
     {
-        if (virusBackgroundToggle == nullptr)
-        {
-            virusBackgroundToggle = std::make_unique<LedToggleButton> (theme, "BG", true);
-            virusBackgroundToggle->setScale (0.82f);
-            virusBackgroundToggle->setTooltip ("Toggle the Virus background photo");
-            virusBackgroundToggle->onClick = [this]
-            {
-                if (virusBackgroundToggle != nullptr)
-                {
-                    virusShowBackground = virusBackgroundToggle->getToggleState();
-                    repaint();
-                }
-            };
-            addAndMakeVisible (*virusBackgroundToggle);
-        }
-
         if (virusKeyboardToggle == nullptr)
         {
             virusKeyboardToggle = std::make_unique<LedToggleButton> (theme, "KB", true);
@@ -1723,9 +1705,7 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
             addAndMakeVisible (*virusKeyboard);
         }
 
-        virusBackgroundToggle->setToggleState (virusShowBackground, juce::dontSendNotification);
         virusKeyboardToggle->setToggleState (virusKeyboardVisible, juce::dontSendNotification);
-        virusBackgroundToggle->setVisible (virusTemplateImage.isValid());
         virusKeyboardToggle->setVisible (true);
         virusKeyboard->setVisible (virusKeyboardVisible);
     }
@@ -4600,66 +4580,52 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
 
     if (isTributeVirus())
     {
-        const auto showBackground = virusShowBackground && virusTemplateImage.isValid();
         const auto uiScale = juce::jlimit (0.9f, 1.2f, juce::jmin (getWidth() / static_cast<float> (kVirusTemplateWidth),
                                                                    getHeight() / static_cast<float> (kVirusTemplateHeight)));
         const int surfaceHeight = juce::jmin (getHeight(), juce::roundToInt (kVirusTemplateHeight * uiScale));
+        juce::ColourGradient surfaceFill (juce::Colour::fromRGB (91, 95, 100), 0.0f, 0.0f,
+                                          juce::Colour::fromRGB (55, 58, 63), 0.0f, static_cast<float> (surfaceHeight), false);
+        g.setGradientFill (surfaceFill);
+        g.fillRect (0, 0, getWidth(), surfaceHeight);
 
-        if (showBackground)
+        if (getHeight() > surfaceHeight)
         {
-            g.drawImageWithin (virusTemplateImage, 0, 0, getWidth(), surfaceHeight, juce::RectanglePlacement::stretchToFit);
-            g.setColour (juce::Colours::black.withAlpha (0.03f));
-            g.fillRect (juce::Rectangle<int> (0, 0, getWidth(), surfaceHeight));
-            if (getHeight() > surfaceHeight)
-            {
-                juce::ColourGradient keyboardArea (juce::Colour::fromRGB (66, 69, 74), 0.0f, static_cast<float> (surfaceHeight),
-                                                   juce::Colour::fromRGB (44, 46, 50), 0.0f, static_cast<float> (getHeight()), false);
-                g.setGradientFill (keyboardArea);
-                g.fillRect (0, surfaceHeight, getWidth(), getHeight() - surfaceHeight);
-                g.setColour (juce::Colours::white.withAlpha (0.14f));
-                g.drawLine (0.0f, static_cast<float> (surfaceHeight), static_cast<float> (getWidth()), static_cast<float> (surfaceHeight), 1.0f);
-            }
-        }
-        else
-        {
-            juce::ColourGradient background (juce::Colour::fromRGB (91, 95, 100), 0.0f, 0.0f,
-                                             juce::Colour::fromRGB (55, 58, 63), 0.0f, static_cast<float> (getHeight()), false);
-            g.setGradientFill (background);
-            g.fillAll();
+            juce::ColourGradient keyboardArea (juce::Colour::fromRGB (66, 69, 74), 0.0f, static_cast<float> (surfaceHeight),
+                                               juce::Colour::fromRGB (44, 46, 50), 0.0f, static_cast<float> (getHeight()), false);
+            g.setGradientFill (keyboardArea);
+            g.fillRect (0, surfaceHeight, getWidth(), getHeight() - surfaceHeight);
+            g.setColour (juce::Colours::white.withAlpha (0.14f));
+            g.drawLine (0.0f, static_cast<float> (surfaceHeight), static_cast<float> (getWidth()), static_cast<float> (surfaceHeight), 1.0f);
         }
 
-        if (! showBackground)
+        auto scaledRect = [uiScale] (juce::Rectangle<float> rect)
         {
-            auto scaledRect = [uiScale] (juce::Rectangle<float> rect)
-            {
-                return juce::Rectangle<float> (rect.getX() * uiScale,
-                                               rect.getY() * uiScale,
-                                               rect.getWidth() * uiScale,
-                                               rect.getHeight() * uiScale);
-            };
+            return juce::Rectangle<float> (rect.getX() * uiScale,
+                                           rect.getY() * uiScale,
+                                           rect.getWidth() * uiScale,
+                                           rect.getHeight() * uiScale);
+        };
 
-            for (const auto& group : virusGroupChrome())
-            {
-                auto frame = scaledRect (group.frame);
-                auto tab = scaledRect (group.tab).translated (0.0f, -scaledFloat (3.0f, uiScale));
-                const auto frameCorner = scaledFloat (4.0f, uiScale);
-                const auto frameOutline = juce::jmax (1.0f, scaledFloat (1.0f, uiScale));
+        for (const auto& group : virusGroupChrome())
+        {
+            auto frame = scaledRect (group.frame);
+            auto tab = scaledRect (group.tab).translated (0.0f, -scaledFloat (3.0f, uiScale));
+            const auto frameCorner = scaledFloat (4.0f, uiScale);
+            const auto frameOutline = juce::jmax (1.0f, scaledFloat (1.0f, uiScale));
 
-                g.setColour (juce::Colour::fromRGBA (24, 28, 34, 168));
-                g.fillRoundedRectangle (frame, frameCorner);
-                g.setColour (juce::Colours::white.withAlpha (0.55f));
-                g.drawRoundedRectangle (frame, frameCorner, frameOutline);
+            g.setColour (juce::Colour::fromRGBA (24, 28, 34, 168));
+            g.fillRoundedRectangle (frame, frameCorner);
+            g.setColour (juce::Colours::white.withAlpha (0.55f));
+            g.drawRoundedRectangle (frame, frameCorner, frameOutline);
 
-                g.setColour (juce::Colour::fromRGB (239, 241, 244).withAlpha (0.98f));
-                g.setColour (juce::Colours::white.withAlpha (0.8f));
-                g.fillRect (tab);
-                g.drawRect (tab.toNearestInt(), juce::roundToInt (juce::jmax (1.0f, scaledFloat (1.0f, uiScale))));
+            g.setColour (juce::Colours::white.withAlpha (0.8f));
+            g.fillRect (tab);
+            g.drawRect (tab.toNearestInt(), juce::roundToInt (juce::jmax (1.0f, scaledFloat (1.0f, uiScale))));
 
-                auto textBounds = tab.toNearestInt().reduced (scaledInt (5.0f, uiScale), 0);
-                g.setFont (juce::Font (juce::FontOptions { 6.2f * uiScale, juce::Font::bold }));
-                g.setColour (juce::Colour::fromRGB (18, 20, 24));
-                g.drawFittedText (group.title, textBounds, juce::Justification::centredLeft, 1);
-            }
+            auto textBounds = tab.toNearestInt().reduced (scaledInt (5.0f, uiScale), 0);
+            g.setFont (juce::Font (juce::FontOptions { 6.2f * uiScale, juce::Font::bold }));
+            g.setColour (juce::Colour::fromRGB (18, 20, 24));
+            g.drawFittedText (group.title, textBounds, juce::Justification::centredLeft, 1);
         }
 
         return;
@@ -4713,7 +4679,7 @@ void AdvancedVSTiAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
     if (! isTributeVirus())
         return;
 
-    const bool showBackground = virusShowBackground && virusTemplateImage.isValid();
+    const bool showBackground = false;
     const auto uiScale = juce::jlimit (0.9f, 1.2f, juce::jmin (getWidth() / static_cast<float> (kVirusTemplateWidth),
                                                                getHeight() / static_cast<float> (kVirusTemplateHeight)));
     const auto primaryColour = juce::Colour::fromRGB (226, 231, 238);
@@ -5422,15 +5388,10 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             card->setScale (1.0f);
         for (auto* card : choiceCards)
             card->setScale (1.0f);
-        if (virusBackgroundToggle != nullptr)
-        {
-            virusBackgroundToggle->setScale (0.82f);
-            virusBackgroundToggle->setBounds (8, 8, 28, 16);
-        }
         if (virusKeyboardToggle != nullptr)
         {
             virusKeyboardToggle->setScale (0.82f);
-            virusKeyboardToggle->setBounds (40, 8, 28, 16);
+            virusKeyboardToggle->setBounds (8, 8, 28, 16);
         }
 
         badgeLabel.setBounds ({});
@@ -5643,8 +5604,6 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         return;
     }
 
-    if (virusBackgroundToggle != nullptr)
-        virusBackgroundToggle->setBounds ({});
     if (virusKeyboardToggle != nullptr)
         virusKeyboardToggle->setBounds ({});
     if (virusKeyboard != nullptr)
