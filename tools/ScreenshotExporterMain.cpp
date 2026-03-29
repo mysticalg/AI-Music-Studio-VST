@@ -20,6 +20,10 @@ bool writePng (const juce::Image& image, const juce::File& outputFile)
         return false;
 
     outputFile.getParentDirectory().createDirectory();
+
+    if (outputFile.existsAsFile() && ! outputFile.deleteFile())
+        return false;
+
     juce::FileOutputStream output (outputFile);
 
     if (! output.openedOk())

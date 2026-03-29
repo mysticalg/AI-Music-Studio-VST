@@ -231,7 +231,11 @@ private:
     [[nodiscard]] bool isTribute909() const noexcept;
     [[nodiscard]] bool isTributeVirus() const noexcept;
     [[nodiscard]] bool usesDrumPadLayout() const noexcept;
+    [[nodiscard]] bool usesFixedInstrumentLayout() const noexcept;
     void syncExternalPadDisplays();
+    void showFixedInstrumentOsdForParam (const juce::String& paramId,
+                                         const juce::String& titleOverride = {},
+                                         double lifetimeMs = 2200.0);
     void updateVirusOscillatorBindings();
     void updateVirusModulatorBindings();
     void refreshVirusValueKnobBindings();
@@ -291,6 +295,9 @@ private:
     int virusLowerFxLegendIndex = 0;
     int virusArpPageIndex = 0;
     int virusPanelModeIndex = 2;
+    juce::String fixedInstrumentOsdTitle;
+    juce::String fixedInstrumentOsdValue;
+    double fixedInstrumentOsdUntilMs = 0.0;
     std::array<int, 3> virusModLeftTargetIndices { 0, 2, 4 };
     std::array<int, 3> virusModRightTargetIndices { -1, -1, -1 };
     juce::String virusOsdTitle;

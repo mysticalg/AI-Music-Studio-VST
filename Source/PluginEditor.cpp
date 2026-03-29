@@ -80,10 +80,83 @@ constexpr int kVirusTemplateWidth = 1045;
 constexpr int kVirusTemplateHeight = 452;
 constexpr int kVirusKnobWidth = 50;
 constexpr int kVirusKnobHeight = 62;
+constexpr int kVirusSliderBottomTrim = 13;
 constexpr int kVirusChoiceHeight = 22;
 constexpr int kVirusToggleSize = 16;
 constexpr int kVirusSquareButtonSize = 33;
 constexpr int kVirusKeyboardExtraHeight = 72;
+
+constexpr int kFixedInstrumentWidth = 1040;
+constexpr int kFixedInstrumentOuterPadding = 24;
+constexpr int kFixedInstrumentHeroHeight = 96;
+constexpr int kFixedInstrumentHeroGap = 18;
+constexpr int kFixedInstrumentChoiceWidth = 236;
+constexpr int kFixedInstrumentChoiceHeight = 82;
+constexpr int kFixedInstrumentChoiceGap = 16;
+constexpr int kFixedInstrumentChoiceBottomGap = 26;
+constexpr int kFixedInstrumentKnobCellWidth = 184;
+constexpr int kFixedInstrumentKnobRowHeight = 112;
+constexpr int kFixedInstrumentKnobColumnGap = 18;
+constexpr int kFixedInstrumentKnobRowGap = 20;
+constexpr int kFixedInstrumentBottomPadding = 32;
+constexpr int kFixedDrumMachineWidth = 1280;
+constexpr int kFixedDrumHeroHeight = 74;
+constexpr int kFixedDrumHeroGap = 10;
+constexpr int kFixedDrumChoiceWidth = 210;
+constexpr int kFixedDrumChoiceHeight = 56;
+constexpr int kFixedDrumChoiceGap = 12;
+constexpr int kFixedDrumChoiceBottomGap = 12;
+constexpr int kFixedDrumSectionHeight = 82;
+constexpr int kFixedDrumSectionGap = 12;
+constexpr int kFixedDrumSectionRowGap = 10;
+constexpr int kFixedDrumKnobWidth = 40;
+constexpr int kFixedDrumKnobHeight = 50;
+constexpr int kFixedDrumKnobCellWidth = 74;
+constexpr int kFixedDrumKnobGap = 8;
+constexpr int kFixedDrumKnobVisualGap = 18;
+constexpr int kFixedDrumSectionPaddingX = 8;
+constexpr int kFixedDrumSectionPaddingTop = 14;
+constexpr int kFixedDrumSectionPaddingBottom = 8;
+constexpr int kFixedDrumLabelWidth = 74;
+constexpr int kFixedDrumSliderBottomTrim = 3;
+
+int fixedDrumKnobRowWidth (int knobCount)
+{
+    if (knobCount <= 0)
+        return 0;
+
+    return (knobCount * kFixedDrumKnobWidth)
+           + ((knobCount - 1) * kFixedDrumKnobVisualGap);
+}
+
+int fixedDrumSectionWidth (int knobCount)
+{
+    if (knobCount <= 0)
+        return 0;
+
+    return (kFixedDrumSectionPaddingX * 2)
+           + fixedDrumKnobRowWidth (knobCount);
+}
+
+int fixedInstrumentKnobColumns (int knobCount)
+{
+    if (knobCount <= 0)
+        return 1;
+
+    if (knobCount >= 30)
+        return 6;
+
+    if (knobCount == 6)
+        return 3;
+
+    if (knobCount <= 5)
+        return knobCount;
+
+    if (knobCount <= 8)
+        return 4;
+
+    return 5;
+}
 
 const std::array<juce::String, 5> kVirusModLeftTargetLabels { "OSC 1", "OSC 2/3", "PW", "RESO", "FLT GAIN" };
 const std::array<juce::String, 6> kVirusModRightTargetLabels { "CUTOFF 1", "CUTOFF 2", "SHAPE", "FM AMT", "PAN", "ASSIGN" };
@@ -643,6 +716,10 @@ void AdvancedVSTiAudioProcessorEditor::AccentLookAndFeel::drawRotarySlider (
     float rotaryEndAngle,
     juce::Slider&)
 {
+    const bool useVirusStyleKnob = theme.tributeVirus
+                                   || theme.tribute909
+                                   || (! theme.tribute303 && ! theme.vecPadMachine);
+
     if (theme.tribute303)
     {
         const auto rawBounds = juce::Rectangle<float> (static_cast<float> (x), static_cast<float> (y), static_cast<float> (width), static_cast<float> (height)).reduced (10.0f);
@@ -687,7 +764,7 @@ void AdvancedVSTiAudioProcessorEditor::AccentLookAndFeel::drawRotarySlider (
         return;
     }
 
-    if (theme.tribute909)
+    if (theme.tribute909 && ! useVirusStyleKnob)
     {
         const auto rawBounds = juce::Rectangle<float> (static_cast<float> (x), static_cast<float> (y), static_cast<float> (width), static_cast<float> (height)).reduced (10.0f);
         const auto size = juce::jmin (rawBounds.getWidth(), rawBounds.getHeight());
@@ -727,7 +804,7 @@ void AdvancedVSTiAudioProcessorEditor::AccentLookAndFeel::drawRotarySlider (
         return;
     }
 
-    if (theme.tributeVirus)
+    if (useVirusStyleKnob)
     {
         const auto rawBounds = juce::Rectangle<float> (static_cast<float> (x), static_cast<float> (y), static_cast<float> (width), static_cast<float> (height)).reduced (6.0f);
         const auto size = juce::jmin (rawBounds.getWidth(), rawBounds.getHeight());
@@ -735,17 +812,21 @@ void AdvancedVSTiAudioProcessorEditor::AccentLookAndFeel::drawRotarySlider (
         const auto centre = bounds.getCentre();
         const auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
         const auto angle = rotaryStartAngle + (sliderPosProportional * (rotaryEndAngle - rotaryStartAngle));
+        const auto knobBody = theme.knobBody.isTransparent() ? theme.panel.brighter (0.22f) : theme.knobBody;
+        const auto trim = theme.trim.isTransparent() ? theme.panelEdge : theme.trim;
+        const auto legend = theme.legend.isTransparent() ? theme.text.withAlpha (0.88f) : theme.legend;
+        const auto knobCap = (theme.knobCap.isTransparent() ? theme.text : theme.knobCap).brighter (0.14f);
 
         g.setColour (juce::Colours::black.withAlpha (0.28f));
         g.fillEllipse (bounds.translated (0.0f, 2.5f));
 
-        juce::ColourGradient knobFill (theme.knobBody.brighter (0.2f), bounds.getCentreX(), bounds.getY(),
-                                       theme.knobBody.darker (0.55f), bounds.getCentreX(), bounds.getBottom(), false);
+        juce::ColourGradient knobFill (knobBody.brighter (0.2f), bounds.getCentreX(), bounds.getY(),
+                                       knobBody.darker (0.55f), bounds.getCentreX(), bounds.getBottom(), false);
         g.setGradientFill (knobFill);
         g.fillEllipse (bounds);
         g.setColour (juce::Colours::white.withAlpha (0.26f));
         g.drawEllipse (bounds.reduced (1.0f), 3.0f);
-        g.setColour (theme.trim.withAlpha (0.9f));
+        g.setColour (trim.withAlpha (0.9f));
         g.drawEllipse (bounds, 1.5f);
 
         const float dotRingRadius = (radius * 1.06f) + 6.0f;
@@ -756,14 +837,14 @@ void AdvancedVSTiAudioProcessorEditor::AccentLookAndFeel::drawRotarySlider (
             const auto dotCentre = centre.getPointOnCircumference (dotRingRadius, tickAngle);
             const auto dotRadius = index % 7 == 0 ? radius * 0.065f : radius * 0.052f;
             const auto dotBounds = juce::Rectangle<float> (dotRadius * 2.0f, dotRadius * 2.0f).withCentre (dotCentre);
-            g.setColour ((index % 7 == 0) ? theme.legend.withAlpha (0.88f) : theme.trim.withAlpha (0.74f));
+            g.setColour ((index % 7 == 0) ? legend.withAlpha (0.88f) : trim.withAlpha (0.74f));
             g.fillEllipse (dotBounds);
         }
 
         const float indicatorLength = (radius * 0.76f) + 1.0f;
         juce::Path indicator;
         indicator.addRoundedRectangle (-1.05f, -indicatorLength, 2.1f, indicatorLength, 1.0f);
-        g.setColour ((theme.knobCap.isTransparent() ? theme.text : theme.knobCap).brighter (0.14f));
+        g.setColour (knobCap);
         g.fillPath (indicator, juce::AffineTransform::rotation (angle).translated (centre.x, centre.y));
         return;
     }
@@ -816,6 +897,9 @@ AdvancedVSTiAudioProcessorEditor::KnobCard::KnobCard (
     : lookAndFeel (lf),
       compact (compactLayout)
 {
+    const bool useFixedInstrumentLayout = ! lf.theme.tribute303
+                                          && ! lf.theme.tributeVirus
+                                          && ! lf.theme.vecPadMachine;
     const auto tooltip = buildControlTooltip (titleText, hintText);
     setTooltip (tooltip);
     titleLabel.setText (titleText, juce::dontSendNotification);
@@ -853,7 +937,7 @@ AdvancedVSTiAudioProcessorEditor::KnobCard::KnobCard (
     slider.setColour (juce::Slider::textBoxHighlightColourId, lf.theme.accent.withAlpha (0.18f));
     addAndMakeVisible (slider);
 
-    if (lf.theme.tributeVirus)
+    if (lf.theme.tributeVirus || useFixedInstrumentLayout)
     {
         titleLabel.setVisible (false);
         hintLabel.setVisible (false);
@@ -874,6 +958,9 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::setScale (float scaleFactor)
 void AdvancedVSTiAudioProcessorEditor::KnobCard::updateMetrics()
 {
     const auto& skin = lookAndFeel.theme;
+    const bool useFixedInstrumentLayout = ! skin.tribute303
+                                          && ! skin.tributeVirus
+                                          && ! skin.vecPadMachine;
     const auto titleSize = (lookAndFeel.theme.tributeVirus ? 9.4f
                             : (lookAndFeel.theme.tribute909 && compact ? 8.4f
                                : ((lookAndFeel.theme.tribute303 || compact) ? 10.5f : 14.0f))) * scale;
@@ -895,7 +982,7 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::updateMetrics()
     slider.setColour (juce::Slider::textBoxHighlightColourId,
                       skin.tributeVirus ? juce::Colours::transparentBlack : skin.accent.withAlpha (0.18f));
 
-    if (skin.tributeVirus)
+    if (skin.tributeVirus || useFixedInstrumentLayout)
     {
         slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         slider.setColour (juce::Slider::textBoxTextColourId, juce::Colours::transparentBlack);
@@ -906,7 +993,8 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::updateMetrics()
                                 juce::roundToInt (((lookAndFeel.theme.tribute909 ? (compact ? 42.0f : 54.0f) : (lookAndFeel.theme.tribute303 ? 56.0f : (compact ? 62.0f : 72.0f)))) * scale),
                                 juce::roundToInt ((lookAndFeel.theme.tribute909 ? (compact ? 16.0f : 18.0f) : (lookAndFeel.theme.tribute303 ? 18.0f : 22.0f)) * scale));
     }
-    slider.setMouseDragSensitivity (juce::roundToInt ((lookAndFeel.theme.tributeVirus ? 185.0f : (compact ? 170.0f : 140.0f)) / juce::jmax (0.75f, scale)));
+    slider.setMouseDragSensitivity (juce::roundToInt (((lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout) ? 185.0f : (compact ? 170.0f : 140.0f))
+                                                      / juce::jmax (0.75f, scale)));
 }
 
 juce::Button* AdvancedVSTiAudioProcessorEditor::KnobCard::getToggleButton() noexcept
@@ -917,6 +1005,9 @@ juce::Button* AdvancedVSTiAudioProcessorEditor::KnobCard::getToggleButton() noex
 void AdvancedVSTiAudioProcessorEditor::KnobCard::paint (juce::Graphics& g)
 {
     auto area = getLocalBounds().toFloat().reduced (1.0f);
+    const bool useFixedInstrumentLayout = ! lookAndFeel.theme.tribute303
+                                          && ! lookAndFeel.theme.tributeVirus
+                                          && ! lookAndFeel.theme.vecPadMachine;
     if (lookAndFeel.theme.tribute303)
     {
         const auto radius = scaledFloat (12.0f, scale);
@@ -929,7 +1020,7 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::paint (juce::Graphics& g)
         return;
     }
 
-    if (lookAndFeel.theme.tributeVirus)
+    if (lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout)
         return;
 
     if (lookAndFeel.theme.tribute909)
@@ -959,7 +1050,11 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::paint (juce::Graphics& g)
 
 void AdvancedVSTiAudioProcessorEditor::KnobCard::resized()
 {
-    if (lookAndFeel.theme.tributeVirus)
+    const bool useFixedInstrumentLayout = ! lookAndFeel.theme.tribute303
+                                          && ! lookAndFeel.theme.tributeVirus
+                                          && ! lookAndFeel.theme.vecPadMachine;
+
+    if (lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout)
     {
         auto area = getLocalBounds();
         titleLabel.setBounds ({});
@@ -969,7 +1064,8 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::resized()
             const auto toggleSize = scaledInt (static_cast<float> (kVirusToggleSize), scale);
             toggleButton->setBounds (area.getRight() - toggleSize, area.getY(), toggleSize, toggleSize);
         }
-        slider.setBounds (area.withTrimmedBottom (scaledInt (13.0f, scale)));
+        const auto bottomTrim = lookAndFeel.theme.tribute909 ? kFixedDrumSliderBottomTrim : kVirusSliderBottomTrim;
+        slider.setBounds (area.withTrimmedBottom (scaledInt (static_cast<float> (bottomTrim), scale)));
         return;
     }
 
@@ -1433,7 +1529,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
       lookAndFeel (theme),
       tooltipWindow (this, 250)
 {
-    if (isTributeVirus())
+    if (isTributeVirus() || usesFixedInstrumentLayout())
     {
         startTimerHz (15);
     }
@@ -1483,6 +1579,51 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
         maxWidth = kVirusTemplateWidth;
         maxHeight = kVirusTemplateHeight;
     }
+    else if (usesFixedInstrumentLayout())
+    {
+        if (isTribute909())
+        {
+            const int choiceRowWidth = choiceCards.isEmpty()
+                                           ? 0
+                                           : (choiceCards.size() * kFixedDrumChoiceWidth)
+                                                 + ((choiceCards.size() - 1) * kFixedDrumChoiceGap)
+                                                 + (kFixedInstrumentOuterPadding * 2);
+            defaultWidth = juce::jmax (kFixedDrumMachineWidth, choiceRowWidth);
+            defaultHeight = kFixedInstrumentOuterPadding
+                            + kFixedDrumHeroHeight
+                            + kFixedDrumHeroGap
+                            + (choiceCards.isEmpty() ? 0 : (kFixedDrumChoiceHeight + kFixedDrumChoiceBottomGap))
+                            + (kFixedDrumSectionHeight * 3)
+                            + (kFixedDrumSectionRowGap * 2)
+                            + 24;
+        }
+        else
+        {
+            const int knobColumns = fixedInstrumentKnobColumns (knobCards.size());
+            const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);
+            const int choiceRowWidth = choiceCards.isEmpty()
+                                           ? 0
+                                           : (choiceCards.size() * kFixedInstrumentChoiceWidth)
+                                                 + ((choiceCards.size() - 1) * kFixedInstrumentChoiceGap)
+                                                 + (kFixedInstrumentOuterPadding * 2);
+            const int knobGridWidth = (knobColumns * kFixedInstrumentKnobCellWidth)
+                                      + ((knobColumns - 1) * kFixedInstrumentKnobColumnGap)
+                                      + (kFixedInstrumentOuterPadding * 2);
+
+            defaultWidth = juce::jmax (kFixedInstrumentWidth, juce::jmax (choiceRowWidth, knobGridWidth));
+            defaultHeight = kFixedInstrumentOuterPadding
+                            + kFixedInstrumentHeroHeight
+                            + kFixedInstrumentHeroGap
+                            + (choiceCards.isEmpty() ? 0 : (kFixedInstrumentChoiceHeight + kFixedInstrumentChoiceBottomGap))
+                            + (knobRows * kFixedInstrumentKnobRowHeight)
+                            + ((knobRows - 1) * kFixedInstrumentKnobRowGap)
+                            + kFixedInstrumentBottomPadding;
+        }
+        minWidth = defaultWidth;
+        minHeight = defaultHeight;
+        maxWidth = defaultWidth;
+        maxHeight = defaultHeight;
+    }
     else if (isStringSynthPluginName (normalizedPluginName (audioProcessor))
              || isAcousticStringsPluginName (normalizedPluginName (audioProcessor)))
     {
@@ -1524,7 +1665,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
         }
     }
 
-    setResizable (! isTributeVirus() && ! backgroundImage.isValid(), false);
+    setResizable (! isTributeVirus() && ! usesFixedInstrumentLayout() && ! backgroundImage.isValid(), false);
     setResizeLimits (minWidth, minHeight, maxWidth, maxHeight);
     setSize (defaultWidth, defaultHeight);
 }
@@ -1602,6 +1743,13 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
             card->slider.onValueChange = [this, paramId = spec.paramId, title = spec.title, hint = spec.hint]
             {
                 showVirusOsdForParam (paramId, title, hint);
+            };
+        }
+        else if (usesFixedInstrumentLayout())
+        {
+            card->slider.onValueChange = [this, paramId = spec.paramId, title = spec.title]
+            {
+                showFixedInstrumentOsdForParam (paramId, title);
             };
         }
         if (spec.toggleParamId.isNotEmpty())
@@ -1732,14 +1880,31 @@ bool AdvancedVSTiAudioProcessorEditor::usesDrumPadLayout() const noexcept
     return audioProcessor.isVec1DrumPadFlavor() || name.contains ("drum") || name.contains ("808");
 }
 
+bool AdvancedVSTiAudioProcessorEditor::usesFixedInstrumentLayout() const noexcept
+{
+    return ! isTribute303() && ! isTributeVirus() && ! audioProcessor.isVec1DrumPadFlavor();
+}
+
 void AdvancedVSTiAudioProcessorEditor::timerCallback()
 {
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (usesFixedInstrumentLayout()
+        && fixedInstrumentOsdUntilMs > 0.0
+        && nowMs > fixedInstrumentOsdUntilMs)
+    {
+        fixedInstrumentOsdUntilMs = 0.0;
+        fixedInstrumentOsdTitle.clear();
+        fixedInstrumentOsdValue.clear();
+        repaint();
+    }
+
     if (isTributeVirus())
     {
         syncVirusPanelButtons();
         if (! virusOsdPinned
             && virusOsdUntilMs > 0.0
-            && juce::Time::getMillisecondCounterHiRes() > virusOsdUntilMs)
+            && nowMs > virusOsdUntilMs)
         {
             virusOsdUntilMs = 0.0;
             virusOsdTitle.clear();
@@ -1764,6 +1929,22 @@ void AdvancedVSTiAudioProcessorEditor::syncExternalPadDisplays()
         const auto state = audioProcessor.getExternalPadState (index);
         drumPads[index]->setSampleInfo (state.preset, state.sample);
         drumPads[index]->setStepperEnabled (state.canStepLeft, state.canStepRight);
+    }
+}
+
+void AdvancedVSTiAudioProcessorEditor::showFixedInstrumentOsdForParam (const juce::String& paramId,
+                                                                       const juce::String& titleOverride,
+                                                                       double lifetimeMs)
+{
+    if (! usesFixedInstrumentLayout())
+        return;
+
+    if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (audioProcessor.apvts.getParameter (paramId)))
+    {
+        fixedInstrumentOsdTitle = titleOverride.isNotEmpty() ? titleOverride : parameter->getName (36);
+        fixedInstrumentOsdValue = parameterValueText (audioProcessor.apvts, paramId);
+        fixedInstrumentOsdUntilMs = juce::Time::getMillisecondCounterHiRes() + lifetimeMs;
+        repaint();
     }
 }
 
@@ -4472,7 +4653,92 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
         return;
     }
 
-    if (isTribute909())
+    if (usesFixedInstrumentLayout())
+    {
+        auto bounds = getLocalBounds().toFloat();
+        juce::ColourGradient background (theme.background.brighter (0.06f), bounds.getTopLeft(),
+                                         theme.background.darker (0.24f), bounds.getBottomRight(), false);
+        g.setGradientFill (background);
+        g.fillAll();
+
+        auto hero = bounds.removeFromTop (126.0f);
+        juce::ColourGradient heroGlow (theme.accentGlow.withAlpha (0.34f), hero.getX() + 120.0f, hero.getY() + 18.0f,
+                                       theme.background.withAlpha (0.0f), hero.getRight(), hero.getBottom(), true);
+        g.setGradientFill (heroGlow);
+        g.fillRoundedRectangle (hero.reduced (16.0f, 12.0f), 24.0f);
+
+        g.setColour (theme.panelEdge);
+        g.drawRoundedRectangle (hero.reduced (16.0f, 12.0f), 24.0f, 1.3f);
+
+        g.setColour (theme.accent.withAlpha (0.6f));
+        g.fillRoundedRectangle (juce::Rectangle<float> (24.0f, 108.0f, static_cast<float> (getWidth()) - 48.0f, 2.5f), 1.25f);
+
+        if (isTribute909())
+        {
+            auto content = getLocalBounds().reduced (kFixedInstrumentOuterPadding);
+            content.removeFromTop (kFixedDrumHeroHeight + kFixedDrumHeroGap);
+            if (! choiceCards.isEmpty())
+                content.removeFromTop (kFixedDrumChoiceHeight + kFixedDrumChoiceBottomGap);
+
+            const int masterWidth = fixedDrumSectionWidth (4);
+            const int kickWidth = fixedDrumSectionWidth (4);
+            const int snareWidth = fixedDrumSectionWidth (4);
+            const int lowTomWidth = fixedDrumSectionWidth (3);
+            const int midTomWidth = fixedDrumSectionWidth (3);
+            const int highTomWidth = fixedDrumSectionWidth (3);
+            const int rimClapWidth = fixedDrumSectionWidth (2);
+            const int hatWidth = fixedDrumSectionWidth (4);
+            const int cymbalWidth = fixedDrumSectionWidth (4);
+            const int percWidth = fixedDrumSectionWidth (4);
+
+            const int row1Width = masterWidth + kickWidth + snareWidth + (kFixedDrumSectionGap * 2);
+            const int row2Width = lowTomWidth + midTomWidth + highTomWidth + (kFixedDrumSectionGap * 2);
+            const int row3Width = rimClapWidth + hatWidth + cymbalWidth + percWidth + (kFixedDrumSectionGap * 3);
+
+            const int row1X = content.getX() + (content.getWidth() - row1Width) / 2;
+            const int row2X = content.getX() + (content.getWidth() - row2Width) / 2;
+            const int row3X = content.getX() + (content.getWidth() - row3Width) / 2;
+            const int row1Y = content.getY();
+            const int row2Y = row1Y + kFixedDrumSectionHeight + kFixedDrumSectionRowGap;
+            const int row3Y = row2Y + kFixedDrumSectionHeight + kFixedDrumSectionRowGap;
+
+            auto drawSection = [&] (juce::Rectangle<int> bounds, const juce::String& title)
+            {
+                auto area = bounds.toFloat();
+                g.setColour (theme.faceplate.withAlpha (0.94f));
+                g.fillRoundedRectangle (area, 14.0f);
+                g.setColour (theme.panelEdge.withAlpha (0.88f));
+                g.drawRoundedRectangle (area, 14.0f, 1.1f);
+                g.setColour (theme.accent.withAlpha (0.78f));
+                g.fillRoundedRectangle (juce::Rectangle<float> (area.getX() + 10.0f, area.getY() + 8.0f, area.getWidth() - 20.0f, 2.0f), 1.0f);
+
+                g.setFont (juce::Font (juce::FontOptions { 9.8f, juce::Font::bold }));
+                g.setColour (theme.legend.isTransparent() ? theme.text : theme.legend);
+                g.drawFittedText (title,
+                                  bounds.reduced (12, 8).removeFromTop (14),
+                                  juce::Justification::centredLeft,
+                                  1,
+                                  0.8f);
+            };
+
+            drawSection ({ row1X, row1Y, masterWidth, kFixedDrumSectionHeight }, "MASTER");
+            drawSection ({ row1X + masterWidth + kFixedDrumSectionGap, row1Y, kickWidth, kFixedDrumSectionHeight }, "KICK");
+            drawSection ({ row1X + masterWidth + kickWidth + (kFixedDrumSectionGap * 2), row1Y, snareWidth, kFixedDrumSectionHeight }, "SNARE");
+
+            drawSection ({ row2X, row2Y, lowTomWidth, kFixedDrumSectionHeight }, "LOW TOM");
+            drawSection ({ row2X + lowTomWidth + kFixedDrumSectionGap, row2Y, midTomWidth, kFixedDrumSectionHeight }, "MID TOM");
+            drawSection ({ row2X + lowTomWidth + midTomWidth + (kFixedDrumSectionGap * 2), row2Y, highTomWidth, kFixedDrumSectionHeight }, "HIGH TOM");
+
+            drawSection ({ row3X, row3Y, rimClapWidth, kFixedDrumSectionHeight }, "RIM / CLAP");
+            drawSection ({ row3X + rimClapWidth + kFixedDrumSectionGap, row3Y, hatWidth, kFixedDrumSectionHeight }, "HI-HATS");
+            drawSection ({ row3X + rimClapWidth + hatWidth + (kFixedDrumSectionGap * 2), row3Y, cymbalWidth, kFixedDrumSectionHeight }, "CYMBALS");
+            drawSection ({ row3X + rimClapWidth + hatWidth + cymbalWidth + (kFixedDrumSectionGap * 3), row3Y, percWidth, kFixedDrumSectionHeight }, "PERCUSSION");
+        }
+
+        return;
+    }
+
+    if (isTribute909() && ! usesFixedInstrumentLayout())
     {
         if (backgroundImage.isValid())
         {
@@ -4676,6 +4942,77 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
 
 void AdvancedVSTiAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
 {
+    if (usesFixedInstrumentLayout())
+    {
+        const auto specs = buildKnobSpecs();
+        const auto titleColour = theme.text.withAlpha (0.96f);
+        const auto shadowColour = juce::Colours::black.withAlpha (0.46f);
+        const auto osdBorder = theme.accent.withAlpha (0.75f);
+
+        auto drawFittedLabel = [&g, shadowColour] (juce::Rectangle<int> area,
+                                                   const juce::String& text,
+                                                   float fontSize,
+                                                   juce::Colour colour,
+                                                   int maxLines,
+                                                   float minimumScale = 0.7f)
+        {
+            if (text.isEmpty() || area.isEmpty())
+                return;
+
+            g.setFont (juce::Font (juce::FontOptions { fontSize, juce::Font::bold }));
+            g.setColour (shadowColour);
+            g.drawFittedText (text, area.translated (0, 1), juce::Justification::centred, maxLines, minimumScale);
+            g.setColour (colour);
+            g.drawFittedText (text, area, juce::Justification::centred, maxLines, minimumScale);
+        };
+
+        for (int index = 0; index < knobCards.size() && index < static_cast<int> (specs.size()); ++index)
+        {
+            const auto knobBounds = knobCards[index]->getBounds();
+            if (knobBounds.isEmpty())
+                continue;
+
+            const int labelWidth = isTribute909() ? kFixedDrumLabelWidth : kFixedInstrumentKnobCellWidth;
+            const int labelYOffset = isTribute909() ? -12 : 4;
+            const int labelHeight = isTribute909() ? 24 : 28;
+            auto labelBounds = juce::Rectangle<int> (knobBounds.getCentreX() - (labelWidth / 2),
+                                                     knobBounds.getBottom() + labelYOffset,
+                                                     labelWidth,
+                                                     labelHeight)
+                                   .getIntersection (getLocalBounds().reduced (1));
+            drawFittedLabel (labelBounds,
+                             specs[static_cast<size_t> (index)].title.toUpperCase(),
+                             isTribute909() ? 9.0f : 10.8f,
+                             titleColour,
+                             isTribute909() ? 1 : 2,
+                             isTribute909() ? 0.76f : 0.62f);
+        }
+
+        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+        if (fixedInstrumentOsdUntilMs > nowMs && fixedInstrumentOsdValue.isNotEmpty())
+        {
+            auto osdBounds = juce::Rectangle<int> (getWidth() - 252, 28, 224, 60);
+            g.setColour (theme.panel.withAlpha (0.96f));
+            g.fillRoundedRectangle (osdBounds.toFloat(), 14.0f);
+            g.setColour (theme.panelEdge.withAlpha (0.92f));
+            g.drawRoundedRectangle (osdBounds.toFloat(), 14.0f, 1.1f);
+            g.setColour (osdBorder);
+            g.drawRoundedRectangle (osdBounds.toFloat().reduced (1.0f), 13.0f, 1.1f);
+
+            auto textArea = osdBounds.reduced (12, 8);
+            auto titleBounds = textArea.removeFromTop (14);
+            drawFittedLabel (titleBounds, fixedInstrumentOsdTitle.toUpperCase(), 9.4f, theme.hint.brighter (0.22f), 1, 0.7f);
+
+            g.setFont (juce::Font (juce::FontOptions { 15.0f, juce::Font::bold }));
+            g.setColour (shadowColour);
+            g.drawFittedText (fixedInstrumentOsdValue, textArea.translated (0, 1), juce::Justification::centredLeft, 1, 0.6f);
+            g.setColour (theme.accent.brighter (0.24f));
+            g.drawFittedText (fixedInstrumentOsdValue, textArea, juce::Justification::centredLeft, 1, 0.6f);
+        }
+
+        return;
+    }
+
     if (! isTributeVirus())
         return;
 
@@ -5205,7 +5542,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         return;
     }
 
-    if (isTribute909())
+    if (isTribute909() && ! usesFixedInstrumentLayout())
     {
         if (backgroundImage.isValid())
         {
@@ -5608,6 +5945,148 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         virusKeyboardToggle->setBounds ({});
     if (virusKeyboard != nullptr)
         virusKeyboard->setBounds ({});
+
+    if (usesFixedInstrumentLayout())
+    {
+        for (auto* card : knobCards)
+            card->setScale (1.0f);
+        for (auto* card : choiceCards)
+        {
+            card->setScale (1.0f);
+            card->setVisible (true);
+        }
+
+        const bool drumFixedLayout = isTribute909();
+        auto area = getLocalBounds().reduced (kFixedInstrumentOuterPadding);
+        auto hero = area.removeFromTop (drumFixedLayout ? kFixedDrumHeroHeight : kFixedInstrumentHeroHeight);
+        badgeLabel.setFont (juce::Font (drumFixedLayout ? 11.0f : 12.0f, juce::Font::bold));
+        titleLabel.setFont (juce::Font (drumFixedLayout ? 24.0f : 28.0f, juce::Font::bold));
+        subtitleLabel.setFont (juce::Font (drumFixedLayout ? 12.0f : 13.0f, juce::Font::plain));
+        auto heroText = hero.withTrimmedRight (isTribute909() ? 0 : 252);
+        badgeLabel.setBounds (heroText.removeFromTop (18));
+        titleLabel.setBounds (heroText.removeFromTop (drumFixedLayout ? 30 : 34));
+        subtitleLabel.setBounds (heroText.removeFromTop (drumFixedLayout ? 22 : 28));
+        area.removeFromTop (drumFixedLayout ? kFixedDrumHeroGap : kFixedInstrumentHeroGap);
+
+        if (! choiceCards.isEmpty())
+        {
+            const int choiceWidth = drumFixedLayout ? kFixedDrumChoiceWidth : kFixedInstrumentChoiceWidth;
+            const int choiceHeight = drumFixedLayout ? kFixedDrumChoiceHeight : kFixedInstrumentChoiceHeight;
+            const int choiceGap = drumFixedLayout ? kFixedDrumChoiceGap : kFixedInstrumentChoiceGap;
+            const int choiceBottomGap = drumFixedLayout ? kFixedDrumChoiceBottomGap : kFixedInstrumentChoiceBottomGap;
+            const float choiceScale = drumFixedLayout ? 0.9f : 1.0f;
+            const int rowWidth = choiceCards.size() * choiceWidth
+                                 + (choiceCards.size() - 1) * choiceGap;
+            int x = area.getX() + (area.getWidth() - rowWidth) / 2;
+            for (auto* card : choiceCards)
+            {
+                card->setScale (choiceScale);
+                card->setBounds (x, area.getY(), choiceWidth, choiceHeight);
+                x += choiceWidth + choiceGap;
+            }
+            area.removeFromTop (choiceHeight + choiceBottomGap);
+        }
+
+        if (isTribute909())
+        {
+            auto clearUnused = [&]
+            {
+                for (auto* pad : drumPads)
+                    pad->setBounds ({});
+            };
+
+            const int masterWidth = fixedDrumSectionWidth (4);
+            const int kickWidth = fixedDrumSectionWidth (4);
+            const int snareWidth = fixedDrumSectionWidth (4);
+            const int lowTomWidth = fixedDrumSectionWidth (3);
+            const int midTomWidth = fixedDrumSectionWidth (3);
+            const int highTomWidth = fixedDrumSectionWidth (3);
+            const int rimClapWidth = fixedDrumSectionWidth (2);
+            const int hatWidth = fixedDrumSectionWidth (4);
+            const int cymbalWidth = fixedDrumSectionWidth (4);
+            const int percWidth = fixedDrumSectionWidth (4);
+
+            const int row1Width = masterWidth + kickWidth + snareWidth + (kFixedDrumSectionGap * 2);
+            const int row2Width = lowTomWidth + midTomWidth + highTomWidth + (kFixedDrumSectionGap * 2);
+            const int row3Width = rimClapWidth + hatWidth + cymbalWidth + percWidth + (kFixedDrumSectionGap * 3);
+
+            const int row1X = area.getX() + (area.getWidth() - row1Width) / 2;
+            const int row2X = area.getX() + (area.getWidth() - row2Width) / 2;
+            const int row3X = area.getX() + (area.getWidth() - row3Width) / 2;
+            const int row1Y = area.getY();
+            const int row2Y = row1Y + kFixedDrumSectionHeight + kFixedDrumSectionRowGap;
+            const int row3Y = row2Y + kFixedDrumSectionHeight + kFixedDrumSectionRowGap;
+
+            auto layoutSection = [this] (juce::Rectangle<int> bounds, std::initializer_list<int> indices)
+            {
+                auto inner = bounds.reduced (kFixedDrumSectionPaddingX, kFixedDrumSectionPaddingBottom);
+                inner.removeFromTop (kFixedDrumSectionPaddingTop);
+                const int count = static_cast<int> (indices.size());
+                if (count <= 0)
+                    return;
+
+                const int totalWidth = fixedDrumKnobRowWidth (count);
+                int x = inner.getX() + (inner.getWidth() - totalWidth) / 2;
+                const int knobY = inner.getY();
+
+                for (int knobIndex : indices)
+                {
+                    if (! juce::isPositiveAndBelow (knobIndex, knobCards.size()))
+                        continue;
+
+                    knobCards[knobIndex]->setBounds (x,
+                                                     knobY,
+                                                     kFixedDrumKnobWidth,
+                                                     kFixedDrumKnobHeight);
+                    x += kFixedDrumKnobWidth + kFixedDrumKnobVisualGap;
+                }
+            };
+
+            layoutSection ({ row1X, row1Y, masterWidth, kFixedDrumSectionHeight }, { 0, 1, 2, 3 });
+            layoutSection ({ row1X + masterWidth + kFixedDrumSectionGap, row1Y, kickWidth, kFixedDrumSectionHeight }, { 4, 5, 6, 7 });
+            layoutSection ({ row1X + masterWidth + kickWidth + (kFixedDrumSectionGap * 2), row1Y, snareWidth, kFixedDrumSectionHeight }, { 8, 9, 10, 11 });
+
+            layoutSection ({ row2X, row2Y, lowTomWidth, kFixedDrumSectionHeight }, { 12, 13, 14 });
+            layoutSection ({ row2X + lowTomWidth + kFixedDrumSectionGap, row2Y, midTomWidth, kFixedDrumSectionHeight }, { 15, 16, 17 });
+            layoutSection ({ row2X + lowTomWidth + midTomWidth + (kFixedDrumSectionGap * 2), row2Y, highTomWidth, kFixedDrumSectionHeight }, { 18, 19, 20 });
+
+            layoutSection ({ row3X, row3Y, rimClapWidth, kFixedDrumSectionHeight }, { 21, 22 });
+            layoutSection ({ row3X + rimClapWidth + kFixedDrumSectionGap, row3Y, hatWidth, kFixedDrumSectionHeight }, { 23, 24, 25, 26 });
+            layoutSection ({ row3X + rimClapWidth + hatWidth + (kFixedDrumSectionGap * 2), row3Y, cymbalWidth, kFixedDrumSectionHeight }, { 27, 28, 29, 30 });
+            layoutSection ({ row3X + rimClapWidth + hatWidth + cymbalWidth + (kFixedDrumSectionGap * 3), row3Y, percWidth, kFixedDrumSectionHeight }, { 31, 32, 33, 34 });
+
+            clearUnused();
+            return;
+        }
+
+        const int knobColumns = fixedInstrumentKnobColumns (knobCards.size());
+        const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);
+        int knobIndex = 0;
+        int rowY = area.getY();
+        for (int row = 0; row < knobRows; ++row)
+        {
+            const int rowCount = juce::jmin (knobColumns, knobCards.size() - knobIndex);
+            const int rowWidth = rowCount * kFixedInstrumentKnobCellWidth
+                                 + (rowCount - 1) * kFixedInstrumentKnobColumnGap;
+            int x = area.getX() + (area.getWidth() - rowWidth) / 2;
+
+            for (int column = 0; column < rowCount; ++column)
+            {
+                knobCards[knobIndex]->setBounds (x + ((kFixedInstrumentKnobCellWidth - kVirusKnobWidth) / 2),
+                                                 rowY,
+                                                 kVirusKnobWidth,
+                                                 kVirusKnobHeight);
+                x += kFixedInstrumentKnobCellWidth + kFixedInstrumentKnobColumnGap;
+                ++knobIndex;
+            }
+
+            rowY += kFixedInstrumentKnobRowHeight + kFixedInstrumentKnobRowGap;
+        }
+
+        for (auto* pad : drumPads)
+            pad->setBounds ({});
+        return;
+    }
 
     if (usesDrumPadLayout())
     {
