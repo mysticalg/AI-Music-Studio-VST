@@ -85,6 +85,7 @@ constexpr int kVirusChoiceHeight = 22;
 constexpr int kVirusToggleSize = 16;
 constexpr int kVirusSquareButtonSize = 33;
 constexpr int kVirusKeyboardExtraHeight = 72;
+constexpr int kStandaloneKeyboardExtraHeight = 92;
 
 constexpr int kFixedInstrumentWidth = 1040;
 constexpr int kFixedInstrumentOuterPadding = 24;
@@ -1673,6 +1674,12 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
         }
     }
 
+    if (usesStandalonePreviewKeyboard())
+    {
+        standaloneKeyboardBaseHeight = defaultHeight;
+        maxHeight = defaultHeight + kStandaloneKeyboardExtraHeight;
+    }
+
     setResizable (! isTributeVirus() && ! usesFixedInstrumentLayout() && ! backgroundImage.isValid(), false);
     setResizeLimits (minWidth, minHeight, maxWidth, maxHeight);
     setSize (defaultWidth, defaultHeight);
@@ -1865,6 +1872,53 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
         virusKeyboardToggle->setVisible (true);
         virusKeyboard->setVisible (virusKeyboardVisible);
     }
+
+    if (usesStandalonePreviewKeyboard())
+    {
+        if (standaloneKeyboardToggle == nullptr)
+        {
+            standaloneKeyboardToggle = std::make_unique<LedToggleButton> (theme, "KB", true);
+            standaloneKeyboardToggle->setScale (0.82f);
+            standaloneKeyboardToggle->setTooltip ("Show or hide the preview keyboard");
+            standaloneKeyboardToggle->onClick = [this]
+            {
+                if (standaloneKeyboardToggle == nullptr)
+                    return;
+
+                standaloneKeyboardVisible = standaloneKeyboardToggle->getToggleState();
+                if (standaloneKeyboard != nullptr)
+                    standaloneKeyboard->setVisible (standaloneKeyboardVisible);
+
+                const auto collapsedHeight = standaloneKeyboardBaseHeight > 0 ? standaloneKeyboardBaseHeight : getHeight();
+                const auto expandedHeight = collapsedHeight + kStandaloneKeyboardExtraHeight;
+                setResizeLimits (getWidth(), collapsedHeight, getWidth(), expandedHeight);
+                setSize (getWidth(), standaloneKeyboardVisible ? expandedHeight : collapsedHeight);
+                resized();
+                repaint();
+            };
+            addAndMakeVisible (*standaloneKeyboardToggle);
+        }
+
+        if (standaloneKeyboard == nullptr)
+        {
+            standaloneKeyboard = std::make_unique<juce::MidiKeyboardComponent> (audioProcessor.getKeyboardState(),
+                                                                                juce::MidiKeyboardComponent::horizontalKeyboard);
+            standaloneKeyboard->setKeyWidth (18.0f);
+            standaloneKeyboard->setAvailableRange (24, 96);
+            standaloneKeyboard->setWantsKeyboardFocus (false);
+            standaloneKeyboard->setScrollButtonsVisible (false);
+            standaloneKeyboard->setColour (juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour::fromRGB (236, 239, 244));
+            standaloneKeyboard->setColour (juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour::fromRGB (38, 42, 48));
+            standaloneKeyboard->setColour (juce::MidiKeyboardComponent::keySeparatorLineColourId, theme.panelEdge.brighter (0.12f));
+            standaloneKeyboard->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, theme.accent.withAlpha (0.24f));
+            standaloneKeyboard->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, theme.accent.withAlpha (0.52f));
+            addAndMakeVisible (*standaloneKeyboard);
+        }
+
+        standaloneKeyboardToggle->setToggleState (standaloneKeyboardVisible, juce::dontSendNotification);
+        standaloneKeyboardToggle->setVisible (true);
+        standaloneKeyboard->setVisible (standaloneKeyboardVisible);
+    }
 }
 
 bool AdvancedVSTiAudioProcessorEditor::isTribute303() const noexcept
@@ -1891,6 +1945,11 @@ bool AdvancedVSTiAudioProcessorEditor::usesDrumPadLayout() const noexcept
 bool AdvancedVSTiAudioProcessorEditor::usesFixedInstrumentLayout() const noexcept
 {
     return ! isTribute303() && ! isTributeVirus() && ! audioProcessor.isVec1DrumPadFlavor();
+}
+
+bool AdvancedVSTiAudioProcessorEditor::usesStandalonePreviewKeyboard() const noexcept
+{
+    return juce::JUCEApplicationBase::isStandaloneApp() && usesFixedInstrumentLayout() && ! isTribute909();
 }
 
 void AdvancedVSTiAudioProcessorEditor::timerCallback()
@@ -5953,6 +6012,10 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         virusKeyboardToggle->setBounds ({});
     if (virusKeyboard != nullptr)
         virusKeyboard->setBounds ({});
+    if (standaloneKeyboardToggle != nullptr && ! usesStandalonePreviewKeyboard())
+        standaloneKeyboardToggle->setBounds ({});
+    if (standaloneKeyboard != nullptr && (! usesStandalonePreviewKeyboard() || ! standaloneKeyboardVisible))
+        standaloneKeyboard->setBounds ({});
 
     if (usesFixedInstrumentLayout())
     {
@@ -5965,8 +6028,24 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         }
 
         const bool drumFixedLayout = isTribute909();
-        auto area = getLocalBounds().reduced (kFixedInstrumentOuterPadding);
+        auto layoutBounds = getLocalBounds();
+        juce::Rectangle<int> standaloneKeyboardArea;
+        if (usesStandalonePreviewKeyboard() && standaloneKeyboardVisible)
+            standaloneKeyboardArea = layoutBounds.removeFromBottom (kStandaloneKeyboardExtraHeight);
+
+        auto area = layoutBounds.reduced (kFixedInstrumentOuterPadding);
         auto hero = area.removeFromTop (drumFixedLayout ? kFixedDrumHeroHeight : kFixedInstrumentHeroHeight);
+        if (standaloneKeyboardToggle != nullptr && usesStandalonePreviewKeyboard())
+        {
+            const auto buttonSize = 28;
+            auto toggleBounds = hero.removeFromRight (buttonSize + 10).removeFromTop (buttonSize);
+            standaloneKeyboardToggle->setBounds (toggleBounds.withSizeKeepingCentre (buttonSize, buttonSize));
+        }
+        else if (standaloneKeyboardToggle != nullptr)
+        {
+            standaloneKeyboardToggle->setBounds ({});
+        }
+
         badgeLabel.setFont (juce::Font (drumFixedLayout ? 11.0f : 12.0f, juce::Font::bold));
         titleLabel.setFont (juce::Font (drumFixedLayout ? 24.0f : 28.0f, juce::Font::bold));
         subtitleLabel.setFont (juce::Font (drumFixedLayout ? 12.0f : 13.0f, juce::Font::plain));
@@ -6092,6 +6171,14 @@ void AdvancedVSTiAudioProcessorEditor::resized()
 
         for (auto* pad : drumPads)
             pad->setBounds ({});
+
+        if (standaloneKeyboard != nullptr)
+        {
+            if (standaloneKeyboardVisible && ! standaloneKeyboardArea.isEmpty())
+                standaloneKeyboard->setBounds (standaloneKeyboardArea.reduced (kFixedInstrumentOuterPadding, 10));
+            else
+                standaloneKeyboard->setBounds ({});
+        }
         return;
     }
 

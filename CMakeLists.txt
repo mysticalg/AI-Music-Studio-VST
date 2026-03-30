@@ -15,15 +15,40 @@ set(AIMS_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 get_filename_component(AIMS_REPO_ROOT "${AIMS_REPO_ROOT}" ABSOLUTE)
 set(AIMS_HOST_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 get_filename_component(AIMS_HOST_REPO_ROOT "${AIMS_HOST_REPO_ROOT}" ABSOLUTE)
+set(AIMS_REPO_PARENT "${AIMS_REPO_ROOT}/..")
+get_filename_component(AIMS_REPO_PARENT "${AIMS_REPO_PARENT}" ABSOLUTE)
+
+function(aims_resolve_cache_dir out_var folder_name)
+  set(resolved_dir "")
+
+  foreach(candidate
+      "${AIMS_REPO_ROOT}/.cache/${folder_name}"
+      "${AIMS_HOST_REPO_ROOT}/.cache/${folder_name}")
+    if(EXISTS "${candidate}")
+      set(resolved_dir "${candidate}")
+      break()
+    endif()
+  endforeach()
+
+  if(NOT resolved_dir)
+    file(GLOB aims_repo_siblings LIST_DIRECTORIES true "${AIMS_REPO_PARENT}/*")
+    foreach(sibling_dir ${aims_repo_siblings})
+      if(EXISTS "${sibling_dir}/.cache/${folder_name}")
+        set(resolved_dir "${sibling_dir}/.cache/${folder_name}")
+        break()
+      endif()
+    endforeach()
+  endif()
+
+  set(${out_var} "${resolved_dir}" PARENT_SCOPE)
+endfunction()
 
 set(AIMS_BINARY_DATA_PLACEHOLDER "${CMAKE_CURRENT_SOURCE_DIR}/Source/BinaryDataPlaceholder.txt")
 set(AIMS_ASSET_SOURCES "${AIMS_BINARY_DATA_PLACEHOLDER}")
 set(AIMS_HAS_TR909_IMAGE 0)
 set(AIMS_VEC1_LIBRARY_DIR "D:/OneDrive/Music/Sound Design/Sample Library/sample library/VEC1")
-set(AIMS_PIANO_LIBRARY_DIR "${AIMS_REPO_ROOT}/.cache/SplendidGrandPiano")
-if(NOT EXISTS "${AIMS_PIANO_LIBRARY_DIR}" AND EXISTS "${AIMS_HOST_REPO_ROOT}/.cache/SplendidGrandPiano")
-  set(AIMS_PIANO_LIBRARY_DIR "${AIMS_HOST_REPO_ROOT}/.cache/SplendidGrandPiano")
-endif()
+aims_resolve_cache_dir(AIMS_PIANO_LIBRARY_DIR "SplendidGrandPiano")
+aims_resolve_cache_dir(AIMS_OPEN_INSTRUMENT_SAMPLES_DIR "OpenInstrumentSamples")
 set(AIMS_TR909_IMAGE "${AIMS_REPO_ROOT}/tr9092.jpg")
 if(NOT EXISTS "${AIMS_TR909_IMAGE}" AND EXISTS "${AIMS_HOST_REPO_ROOT}/tr9092.jpg")
   set(AIMS_TR909_IMAGE "${AIMS_HOST_REPO_ROOT}/tr9092.jpg")
@@ -64,6 +89,8 @@ function(add_ai_music_vst3 target_name product_name plugin_code flavor_code bund
     PRIVATE
       AIMS_INSTRUMENT_FLAVOR=${flavor_code}
       AIMS_HAS_TR909_IMAGE=${AIMS_HAS_TR909_IMAGE}
+      AIMS_OPEN_INSTRUMENT_SAMPLES_PATH="${AIMS_OPEN_INSTRUMENT_SAMPLES_DIR}"
+      AIMS_PIANO_LIBRARY_PATH="${AIMS_PIANO_LIBRARY_DIR}"
       AIMS_REPO_ROOT_PATH="${AIMS_REPO_ROOT}"
     PUBLIC
       JUCE_WEB_BROWSER=0
@@ -101,6 +128,8 @@ function(add_ai_music_screenshot_exporter target_name product_name flavor_code)
     PRIVATE
       AIMS_INSTRUMENT_FLAVOR=${flavor_code}
       AIMS_HAS_TR909_IMAGE=${AIMS_HAS_TR909_IMAGE}
+      AIMS_OPEN_INSTRUMENT_SAMPLES_PATH="${AIMS_OPEN_INSTRUMENT_SAMPLES_DIR}"
+      AIMS_PIANO_LIBRARY_PATH="${AIMS_PIANO_LIBRARY_DIR}"
       AIMS_REPO_ROOT_PATH="${AIMS_REPO_ROOT}"
       JucePlugin_Name="${product_name}"
       JUCE_WEB_BROWSER=0

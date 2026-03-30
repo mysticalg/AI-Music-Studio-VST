@@ -13,10 +13,19 @@
 #define AIMS_REPO_ROOT_PATH "."
 #endif
 
+#ifndef AIMS_PIANO_LIBRARY_PATH
+#define AIMS_PIANO_LIBRARY_PATH ""
+#endif
+
+#ifndef AIMS_OPEN_INSTRUMENT_SAMPLES_PATH
+#define AIMS_OPEN_INSTRUMENT_SAMPLES_PATH ""
+#endif
+
 namespace
 {
 constexpr float twoPi = juce::MathConstants<float>::twoPi;
 constexpr int pluginStateVersion = 3;
+
 constexpr std::array<const char*, 15> drumVoiceLevelParamIds {
     "DRUMLEVEL_KICK",
     "DRUMLEVEL_SNARE",
@@ -751,23 +760,72 @@ juce::File vecPadLibraryRoot()
     return juce::File::createFileWithoutCheckingPath (R"(D:\OneDrive\Music\Sound Design\Sample Library\sample library\VEC1)");
 }
 
+juce::File repoLinkedCacheRoot (const juce::String& folderName)
+{
+    const auto repoRoot = juce::File::createFileWithoutCheckingPath (juce::String (AIMS_REPO_ROOT_PATH));
+    if (! repoRoot.isDirectory())
+        return {};
+
+    const auto directCacheRoot = repoRoot.getChildFile (".cache").getChildFile (folderName);
+    if (directCacheRoot.isDirectory())
+        return directCacheRoot;
+
+    auto ancestor = repoRoot;
+    for (int depth = 0; depth < 3; ++depth)
+    {
+        ancestor = ancestor.getParentDirectory();
+        if (! ancestor.isDirectory())
+            break;
+
+        const auto ancestorCacheRoot = ancestor.getChildFile (".cache").getChildFile (folderName);
+        if (ancestorCacheRoot.isDirectory())
+            return ancestorCacheRoot;
+    }
+
+    const auto siblingParent = repoRoot.getParentDirectory();
+    if (! siblingParent.isDirectory())
+        return {};
+
+    const auto aiMusicStudioSibling = siblingParent.getChildFile ("AI-Music-Studio").getChildFile (".cache").getChildFile (folderName);
+    if (aiMusicStudioSibling.isDirectory())
+        return aiMusicStudioSibling;
+
+    for (const auto& sibling : siblingParent.findChildFiles (juce::File::findDirectories, false))
+    {
+        if (sibling.getFullPathName() == repoRoot.getFullPathName())
+            continue;
+
+        const auto siblingCacheRoot = sibling.getChildFile (".cache").getChildFile (folderName);
+        if (siblingCacheRoot.isDirectory())
+            return siblingCacheRoot;
+    }
+
+    return {};
+}
+
+juce::File configuredLibraryRoot (const juce::String& configuredPath)
+{
+    if (configuredPath.trim().isEmpty())
+        return {};
+
+    const auto configuredRoot = juce::File::createFileWithoutCheckingPath (configuredPath);
+    if (configuredRoot.isDirectory())
+        return configuredRoot;
+
+    return {};
+}
+
 juce::File pianoLibraryRoot()
 {
     const auto bundledRoot = bundledInstrumentResourceRoot ("Piano");
     if (bundledRoot.isDirectory())
         return bundledRoot;
 
-    const auto repoRoot = juce::File::createFileWithoutCheckingPath (juce::String (AIMS_REPO_ROOT_PATH));
-    const auto cachedRoot = repoRoot.getChildFile (".cache").getChildFile ("SplendidGrandPiano");
-    if (cachedRoot.isDirectory())
-        return cachedRoot;
+    const auto configuredRoot = configuredLibraryRoot (juce::String (AIMS_PIANO_LIBRARY_PATH));
+    if (configuredRoot.isDirectory())
+        return configuredRoot;
 
-    const auto parentRepoRoot = repoRoot.getParentDirectory().getParentDirectory();
-    const auto parentCachedRoot = parentRepoRoot.getChildFile (".cache").getChildFile ("SplendidGrandPiano");
-    if (parentCachedRoot.isDirectory())
-        return parentCachedRoot;
-
-    return {};
+    return repoLinkedCacheRoot ("SplendidGrandPiano");
 }
 
 juce::File openInstrumentSamplesRoot()
@@ -776,17 +834,11 @@ juce::File openInstrumentSamplesRoot()
     if (bundledRoot.isDirectory())
         return bundledRoot;
 
-    const auto repoRoot = juce::File::createFileWithoutCheckingPath (juce::String (AIMS_REPO_ROOT_PATH));
-    const auto cachedRoot = repoRoot.getChildFile (".cache").getChildFile ("OpenInstrumentSamples");
-    if (cachedRoot.isDirectory())
-        return cachedRoot;
+    const auto configuredRoot = configuredLibraryRoot (juce::String (AIMS_OPEN_INSTRUMENT_SAMPLES_PATH));
+    if (configuredRoot.isDirectory())
+        return configuredRoot;
 
-    const auto parentRepoRoot = repoRoot.getParentDirectory().getParentDirectory();
-    const auto parentCachedRoot = parentRepoRoot.getChildFile (".cache").getChildFile ("OpenInstrumentSamples");
-    if (parentCachedRoot.isDirectory())
-        return parentCachedRoot;
-
-    return {};
+    return repoLinkedCacheRoot ("OpenInstrumentSamples");
 }
 
 juce::String normalizeRepoRelativePath (const juce::String& rawPath)
@@ -1346,6 +1398,14 @@ juce::File bundledInstrumentResourceRoot (const juce::String& folderName)
         if (GetModuleFileNameW (moduleHandle, modulePath, MAX_PATH) > 0)
         {
             auto moduleFile = juce::File (juce::String (modulePath));
+            const auto standaloneScopedRoot = moduleFile.getParentDirectory().getChildFile ("Resources").getChildFile (folderName);
+            if (standaloneScopedRoot.isDirectory())
+                return standaloneScopedRoot;
+
+            const auto parentScopedRoot = moduleFile.getParentDirectory().getParentDirectory().getChildFile ("Resources").getChildFile (folderName);
+            if (parentScopedRoot.isDirectory())
+                return parentScopedRoot;
+
             auto contentsDir = moduleFile.getParentDirectory();
             if (contentsDir.getFileName().equalsIgnoreCase ("x86_64-win"))
                 contentsDir = contentsDir.getParentDirectory();
@@ -2066,7 +2126,7 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
         return;
 
     const auto clampedBank = juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), bankIndex);
-    if (loadedAcousticSampleBank == clampedBank && acousticSampleLibrary != nullptr)
+    if (loadedAcousticSampleBank == clampedBank)
         return;
 
     auto relativeSfzPath = [&] () -> juce::String
@@ -2125,7 +2185,7 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
     if (! root.isDirectory() || relativeSfzPath.isEmpty() || ! sfzFile.existsAsFile())
     {
         acousticSampleLibrary.reset();
-        loadedAcousticSampleBank = -1;
+        loadedAcousticSampleBank = clampedBank;
         return;
     }
 
@@ -2578,8 +2638,14 @@ void AdvancedVSTiAudioProcessor::refreshSampleBank()
     if constexpr (isAcousticFlavor() && buildFlavor() != InstrumentFlavor::piano)
     {
         initializeAcousticSampleLibrary (targetBank);
-        loadedSampleBank = targetBank;
-        return;
+
+        if (acousticSampleLibrary != nullptr && acousticSampleLibrary->available)
+        {
+            loadedSample.setSize (1, 1);
+            loadedSample.clear();
+            loadedSampleBank = targetBank;
+            return;
+        }
     }
 
     if (loadedSampleBank == targetBank && loadedSample.getNumSamples() > 1)
@@ -3350,7 +3416,9 @@ void AdvancedVSTiAudioProcessor::startVoiceForMidiNote (int midiNote, float velo
     if constexpr (buildFlavor() == InstrumentFlavor::piano)
         assignPianoSampleToVoice (voice, midiNote, velocity);
     else if constexpr (isAcousticFlavor())
+    {
         assignAcousticSampleToVoice (voice, midiNote, velocity);
+    }
     voice.unisonPhases.fill (0.0f);
     voice.unisonSyncPhases.fill (0.0f);
     voice.unisonSamplePositions.fill (0.0f);
@@ -3712,12 +3780,38 @@ float AdvancedVSTiAudioProcessor::oscSampleForState (float& phase, float& syncPh
             const auto loopEnd = juce::jlimit (loopStart + 1, totalSamples, juce::roundToInt (renderParams.sampleEnd * static_cast<float> (totalSamples)));
             if (samplePos < static_cast<float> (loopStart) || samplePos >= static_cast<float> (loopEnd))
                 samplePos = static_cast<float> (loopStart);
-            const auto idx = juce::jlimit (loopStart, loopEnd - 1, static_cast<int> (samplePos));
-            const auto sample = loadedSample.getSample (0, idx);
+
+            auto interpolatedLoadedSampleAt = [&] (float position) -> float
+            {
+                const auto indexA = juce::jlimit (loopStart, loopEnd - 1, static_cast<int> (position));
+                const auto indexB = (indexA + 1 < loopEnd) ? (indexA + 1) : loopStart;
+                const auto alpha = position - static_cast<float> (indexA);
+                const auto sampleA = loadedSample.getSample (0, indexA);
+                const auto sampleB = loadedSample.getSample (0, indexB);
+                return juce::jmap (alpha, sampleA, sampleB);
+            };
+
+            auto sample = interpolatedLoadedSampleAt (samplePos);
+            const auto loopLength = juce::jmax (1, loopEnd - loopStart);
+            const auto crossfadeSamples = juce::jlimit (16, 256, loopLength / 3);
+            const auto distanceToLoopEnd = static_cast<float> (loopEnd) - samplePos;
+
+            if (crossfadeSamples > 0 && distanceToLoopEnd <= static_cast<float> (crossfadeSamples))
+            {
+                const auto wrappedPosition = static_cast<float> (loopStart)
+                                             + (static_cast<float> (crossfadeSamples) - distanceToLoopEnd);
+                const auto headSample = interpolatedLoadedSampleAt (wrappedPosition);
+                const auto blend = juce::jlimit (0.0f, 1.0f, 1.0f - (distanceToLoopEnd / static_cast<float> (crossfadeSamples)));
+                sample = juce::jmap (blend, sample, headSample);
+            }
+
             const auto playbackRatio = juce::jlimit (0.125f, 8.0f, baseFreq / 261.6256f);
             samplePos += playbackRatio;
             if (samplePos >= static_cast<float> (loopEnd))
-                samplePos = static_cast<float> (loopStart);
+            {
+                const auto wrappedOffset = std::fmod (samplePos - static_cast<float> (loopStart), static_cast<float> (loopLength));
+                samplePos = static_cast<float> (loopStart) + wrappedOffset;
+            }
             return sample;
         }
         case OscType::sine:
@@ -4282,12 +4376,43 @@ float AdvancedVSTiAudioProcessor::renderInstrumentMultisampleVoice (VoiceState& 
             voice.externalSamplePosition -= static_cast<double> (loopLength);
     }
 
-    const auto indexA = juce::jlimit (0, totalSamples - 1, static_cast<int> (voice.externalSamplePosition));
-    const auto indexB = juce::jmin (totalSamples - 1, indexA + 1);
-    const auto alpha = static_cast<float> (voice.externalSamplePosition - static_cast<double> (indexA));
-    const auto sampleA = voice.externalSample->audio.getSample (0, indexA);
-    const auto sampleB = voice.externalSample->audio.getSample (0, indexB);
-    const auto output = juce::jmap (alpha, sampleA, sampleB);
+    auto interpolatedSampleAt = [&voice, totalSamples] (double position) -> float
+    {
+        const auto indexA = juce::jlimit (0, totalSamples - 1, static_cast<int> (position));
+        const auto indexB = juce::jmin (totalSamples - 1, indexA + 1);
+        const auto alpha = static_cast<float> (position - static_cast<double> (indexA));
+        const auto sampleA = voice.externalSample->audio.getSample (0, indexA);
+        const auto sampleB = voice.externalSample->audio.getSample (0, indexB);
+        return juce::jmap (alpha, sampleA, sampleB);
+    };
+
+    auto output = interpolatedSampleAt (voice.externalSamplePosition);
+
+    if (voice.externalSampleLoopEnabled)
+    {
+        const auto loopLength = juce::jmax (1, voice.externalSampleLoopEnd - voice.externalSampleLoopStart);
+        const auto crossfadeSamples = juce::jlimit (8, 128, loopLength / 4);
+        const auto distanceToLoopEnd = static_cast<double> (voice.externalSampleLoopEnd) - voice.externalSamplePosition;
+
+        if (crossfadeSamples > 0 && distanceToLoopEnd <= static_cast<double> (crossfadeSamples))
+        {
+            const auto wrappedPosition = static_cast<double> (voice.externalSampleLoopStart)
+                                         + (static_cast<double> (crossfadeSamples) - distanceToLoopEnd);
+            const auto headSample = interpolatedSampleAt (wrappedPosition);
+            const auto blend = juce::jlimit (0.0f,
+                                             1.0f,
+                                             static_cast<float> (1.0 - (distanceToLoopEnd / static_cast<double> (crossfadeSamples))));
+            output = juce::jmap (blend, output, headSample);
+        }
+    }
+    else
+    {
+        const auto tailFadeSamples = juce::jlimit (16, 192, totalSamples / 32);
+        const auto samplesRemaining = static_cast<double> (totalSamples) - voice.externalSamplePosition;
+        if (samplesRemaining <= static_cast<double> (tailFadeSamples))
+            output *= juce::jlimit (0.0f, 1.0f, static_cast<float> (samplesRemaining / static_cast<double> (tailFadeSamples)));
+    }
+
     const auto pitchRatio = std::pow (2.0,
                                       (static_cast<double> ((soundingMidiNote + voice.externalSampleTuneSemitones)
                                                             - static_cast<float> (voice.externalSampleRootMidi)))
@@ -4502,7 +4627,8 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
 
     auto baseHz = midiToHzFloat (soundingMidiNote);
     baseHz *= std::pow (2.0f, voiceMod.osc1Pitch / 12.0f);
-    const auto useInstrumentMultisample = isAcousticFlavor() && voice.externalSample != nullptr;
+    const auto useInstrumentMultisample = isAcousticFlavor()
+                                          && voice.externalSample != nullptr;
     const auto releaseHint = juce::jlimit (0.0f, 1.0f, (0.6f - ampEnv) * 2.4f)
                              * juce::jlimit (0.0f, 1.0f, (voice.noteAge - 0.05f) * 6.0f);
     float s = 0.0f;
@@ -4684,30 +4810,36 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
                                            1.3f);
         voice.auxPhase = std::fmod (voice.auxPhase + ((expressiveBank ? 6.0f : 5.4f) / static_cast<float> (currentSampleRate)), 1.0f);
         const auto vibrato = std::sin (twoPi * voice.auxPhase) * (0.0014f + voice.velocity * (expressiveBank ? 0.0052f : 0.0036f)) * vibratoRamp;
-        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (rosinBank ? 0.16f : 0.11f),
-                                           rosinBank ? 0.08f : 0.05f,
-                                           voice.colourState);
         const auto singing = std::sin (twoPi * std::fmod ((voice.phase * 2.01f) + vibrato, 1.0f)) * (expressiveBank ? 0.14f : 0.1f);
         const auto body = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + (voice.auxPhase * 0.02f), 1.0f)) * (sectionBank ? 0.11f : 0.08f);
-        const auto bowNoise = voice.colourState * (0.1f + (rosinBank ? 0.07f : 0.0f)) * std::exp (-voice.noteAge * (rosinBank ? 20.0f : 10.0f));
-        const auto scrape = (random.nextFloat() * 2.0f - 1.0f)
-                            * (0.08f + voice.velocity * 0.06f + (rosinBank ? 0.05f : 0.0f))
-                            * std::exp (-voice.noteAge * 42.0f);
         const auto releaseSigh = releaseHint * (0.03f + (sectionBank ? 0.02f : 0.0f));
         if (useInstrumentMultisample)
         {
-            s = smoothTowards ((s * 0.985f)
-                                   + (singing * 0.018f)
-                                   + (body * 0.026f)
-                                   + (bowNoise * 0.32f)
-                                   + scrape
+            const auto textureTarget = std::sin (twoPi * std::fmod ((voice.auxPhase * 0.31f) + (voice.phase * 0.17f), 1.0f))
+                                       * (rosinBank ? 0.018f : 0.011f);
+            voice.colourState = smoothTowards (textureTarget,
+                                               rosinBank ? 0.025f : 0.02f,
+                                               voice.colourState);
+            const auto bodyBlend = body * (sectionBank ? 0.012f : 0.009f);
+            const auto bowTexture = voice.colourState * (0.55f + voice.velocity * 0.08f);
+            s = smoothTowards ((s * 0.992f)
+                                   + (singing * 0.008f)
+                                   + bodyBlend
+                                   + bowTexture
                                    + releaseSigh,
-                               0.02f,
+                               sectionBank ? 0.014f : 0.012f,
                                voice.toneState);
-            s = softSaturate (s * (1.01f + (expressiveBank ? 0.02f : 0.0f))) * 0.985f * attackBlend;
+            s = softSaturate (s * (1.0f + (expressiveBank ? 0.01f : 0.0f))) * 0.992f * attackBlend;
         }
         else
         {
+            voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (rosinBank ? 0.16f : 0.11f),
+                                               rosinBank ? 0.08f : 0.05f,
+                                               voice.colourState);
+            const auto bowNoise = voice.colourState * (0.1f + (rosinBank ? 0.07f : 0.0f)) * std::exp (-voice.noteAge * (rosinBank ? 20.0f : 10.0f));
+            const auto scrape = (random.nextFloat() * 2.0f - 1.0f)
+                                * (0.08f + voice.velocity * 0.06f + (rosinBank ? 0.05f : 0.0f))
+                                * std::exp (-voice.noteAge * 42.0f);
             s = smoothTowards ((s * 0.8f) + singing + body + bowNoise + scrape + releaseSigh,
                                sectionBank ? 0.035f : 0.03f,
                                voice.toneState);
@@ -4999,7 +5131,9 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
     ++sampleModSums.activeVoices;
 
     voice.noteAge += 1.0f / static_cast<float> (currentSampleRate);
-    const auto gatePass = voice.noteAge < juce::jlimit (0.01f, 8.0f, params.gateLength + voiceMod.gateLength) ? 1.0f : 0.0f;
+    auto gatePass = 1.0f;
+    if constexpr (! isAcousticFlavor())
+        gatePass = voice.noteAge < juce::jlimit (0.01f, 8.0f, params.gateLength + voiceMod.gateLength) ? 1.0f : 0.0f;
 
     const auto gatePhase = params.lfo3EnvMode ? std::fmod (params.rhythmGateRate * voice.noteAge, 1.0f) : lfo3Phase;
     const auto rg = 0.5f * (1.0f + lfoValue (params.lfo3Shape, gatePhase));
@@ -5013,7 +5147,10 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
 
     const auto velocityGain = useInstrumentMultisample ? juce::jlimit (0.74f, 1.12f, 0.74f + (voice.velocity * 0.38f))
                                                        : voice.velocity;
-    return s * ampEnv * juce::jlimit (0.0f, 2.0f, 1.0f + voiceMod.ampLevel) * gatePass * rhythmGate * velocityGain;
+    const auto clickGuard = (useInstrumentMultisample || (isAcousticFlavor() && params.oscType == OscType::sample))
+                                ? juce::jlimit (0.0f, 1.0f, voice.noteAge / 0.008f)
+                                : 1.0f;
+    return s * ampEnv * juce::jlimit (0.0f, 2.0f, 1.0f + voiceMod.ampLevel) * gatePass * rhythmGate * velocityGain * clickGuard;
 }
 
 void AdvancedVSTiAudioProcessor::updateRenderParameters()

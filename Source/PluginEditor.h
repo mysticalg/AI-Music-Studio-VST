@@ -232,6 +232,7 @@ private:
     [[nodiscard]] bool isTributeVirus() const noexcept;
     [[nodiscard]] bool usesDrumPadLayout() const noexcept;
     [[nodiscard]] bool usesFixedInstrumentLayout() const noexcept;
+    [[nodiscard]] bool usesStandalonePreviewKeyboard() const noexcept;
     void syncExternalPadDisplays();
     void showFixedInstrumentOsdForParam (const juce::String& paramId,
                                          const juce::String& titleOverride = {},
@@ -282,7 +283,11 @@ private:
     juce::OwnedArray<DrumPad> drumPads;
     juce::OwnedArray<LedToggleButton> virusPanelButtons;
     std::vector<juce::String> virusPanelButtonKeys;
+    std::unique_ptr<LedToggleButton> standaloneKeyboardToggle;
+    std::unique_ptr<juce::MidiKeyboardComponent> standaloneKeyboard;
     std::unique_ptr<LedToggleButton> virusKeyboardToggle;
+    bool standaloneKeyboardVisible = false;
+    int standaloneKeyboardBaseHeight = 0;
     std::unique_ptr<juce::MidiKeyboardComponent> virusKeyboard;
     juce::Image backgroundImage;
     bool virusKeyboardVisible = false;
