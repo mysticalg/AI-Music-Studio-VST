@@ -431,6 +431,21 @@ private:
         juce::String presetName;
     };
 
+    struct EqSettingsSnapshot
+    {
+        bool valid = false;
+        double sampleRate = 0.0;
+        float lowEqGainDb = 0.0f;
+        float lowEqFreq = 220.0f;
+        float lowEqQ = 0.8f;
+        float midEqGainDb = 0.0f;
+        float midEqFreq = 1400.0f;
+        float midEqQ = 1.1f;
+        float highEqGainDb = 0.0f;
+        float highEqFreq = 5000.0f;
+        float highEqQ = 0.8f;
+    };
+
     std::array<VoiceState, maxVoices> voices;
     RenderParameters renderParams;
 
@@ -473,8 +488,10 @@ private:
     juce::dsp::IIR::Filter<float> highEqRight;
     juce::Reverb reverb;
     juce::AudioBuffer<float> delayBuffer;
+    juce::AudioBuffer<float> wetScratchBuffer;
     int delayWritePosition = 0;
     float currentFilterEnvPeak = 0.0f;
+    EqSettingsSnapshot cachedEqSettings;
 
     float lfo1Phase = 0.0f;
     float lfo2Phase = 0.0f;
@@ -681,6 +698,8 @@ private:
     [[nodiscard]] static juce::String externalPadSustainParameterIdForIndex (int padIndex);
     [[nodiscard]] static juce::String externalPadReleaseParameterIdForIndex (int padIndex);
     void applyAdvancedEffects (juce::AudioBuffer<float>& buffer);
+    void ensureWetScratchBufferSize (int numChannels, int numSamples);
+    void refreshEqFiltersIfNeeded();
 
     void updateRenderParameters();
     void applyEnvelopeSettings();

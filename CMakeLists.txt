@@ -106,6 +106,11 @@ function(add_ai_music_vst3 target_name product_name plugin_code flavor_code bund
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+  if(MSVC AND TARGET ${target_name}_Standalone)
+    # MSVC emits a standalone-only false positive from JUCE sources for C4702.
+    target_compile_options(${target_name}_Standalone PRIVATE /wd4702)
+  endif()
 endfunction()
 
 function(add_ai_music_screenshot_exporter target_name product_name flavor_code)

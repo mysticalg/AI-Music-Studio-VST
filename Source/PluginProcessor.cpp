@@ -25,7 +25,7 @@ namespace
 {
 constexpr float twoPi = juce::MathConstants<float>::twoPi;
 constexpr int pluginStateVersion = 3;
-
+constexpr float eqCacheTolerance = 1.0e-4f;
 constexpr std::array<const char*, 15> drumVoiceLevelParamIds {
     "DRUMLEVEL_KICK",
     "DRUMLEVEL_SNARE",
@@ -1149,6 +1149,11 @@ float midiToHzFloat (float note)
     return 440.0f * std::pow (2.0f, (note - 69.0f) / 12.0f);
 }
 
+bool nearlyEqual (float a, float b) noexcept
+{
+    return std::abs (a - b) <= eqCacheTolerance;
+}
+
 float shapedEnv (float value, float curve)
 {
     if (curve >= 0.0f)
@@ -1678,6 +1683,7 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     loadedSampleBank = -1;
     loadedAcousticSampleBank = -1;
     acousticSampleLibrary.reset();
+    cachedEqSettings.valid = false;
     initializePianoSampleLibrary();
 
     juce::dsp::ProcessSpec spec { sampleRate, static_cast<juce::uint32> (samplesPerBlock), 1 };
@@ -1725,6 +1731,8 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     reverb.reset();
     delayBuffer.setSize (2, juce::jmax (samplesPerBlock * 4, static_cast<int> (sampleRate * 3.0)));
     delayBuffer.clear();
+    wetScratchBuffer.setSize (2, juce::jmax (1, samplesPerBlock), false, false, true);
+    wetScratchBuffer.clear();
     delayWritePosition = 0;
 
     for (auto& voice : voices)
@@ -1742,7 +1750,11 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     reset();
 }
 
-void AdvancedVSTiAudioProcessor::releaseResources() {}
+void AdvancedVSTiAudioProcessor::releaseResources()
+{
+    wetScratchBuffer.setSize (0, 0);
+    cachedEqSettings.valid = false;
+}
 
 void AdvancedVSTiAudioProcessor::reset()
 {
@@ -2647,12 +2659,14 @@ void AdvancedVSTiAudioProcessor::refreshSampleBank()
             return;
         }
     }
+    else
+    {
+        if (loadedSampleBank == targetBank && loadedSample.getNumSamples() > 1)
+            return;
 
-    if (loadedSampleBank == targetBank && loadedSample.getNumSamples() > 1)
-        return;
-
-    buildGeneratedSampleBank (targetBank);
-    loadedSampleBank = targetBank;
+        buildGeneratedSampleBank (targetBank);
+        loadedSampleBank = targetBank;
+    }
 }
 
 void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
@@ -4457,9 +4471,6 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         }
     };
 
-    const auto lfo1ValueNow = params.lfo1Enabled ? lfoValue (params.lfo1Shape, lfoPhaseFor (0)) : 0.0f;
-    const auto lfo2ValueNow = params.lfo2Enabled ? lfoValue (params.lfo2Shape, lfoPhaseFor (1)) : 0.0f;
-    const auto lfo3ValueNow = params.lfo3Enabled ? lfoValue (params.lfo3Shape, lfoPhaseFor (2)) : 0.0f;
     const auto ampEnv = shapedEnv (voice.ampEnv.getNextSample(), params.envCurve);
     const auto filtEnv = shapedEnv (voice.filterEnv.getNextSample(), params.envCurve);
 
@@ -4532,62 +4543,89 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         }
     };
 
-    auto applyLfoDestination = [&] (int destination, int assignDestination, float value)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
     {
-        switch (destination)
-        {
-            case 0: applyMatrixDestination (static_cast<int> (MatrixDestination::osc1Pitch), value); break;
-            case 1: applyMatrixDestination (static_cast<int> (MatrixDestination::osc23Pitch), value); break;
-            case 2: applyMatrixDestination (static_cast<int> (MatrixDestination::pulseWidth), value); break;
-            case 3: applyMatrixDestination (static_cast<int> (MatrixDestination::resonance), value); break;
-            case 4: applyMatrixDestination (static_cast<int> (MatrixDestination::filterGain), value); break;
-            case 5: applyMatrixDestination (static_cast<int> (MatrixDestination::cutoff1), value); break;
-            case 6: applyMatrixDestination (static_cast<int> (MatrixDestination::cutoff2), value); break;
-            case 7: applyMatrixDestination (static_cast<int> (MatrixDestination::shape), value); break;
-            case 8: applyMatrixDestination (static_cast<int> (MatrixDestination::fmAmount), value); break;
-            case 9: applyMatrixDestination (static_cast<int> (MatrixDestination::panorama), value); break;
-            case 10: applyMatrixDestination (assignDestination, value); break;
-            default: break;
-        }
-    };
+        const auto lfo1ValueNow = params.lfo1Enabled ? lfoValue (params.lfo1Shape, lfoPhaseFor (0)) : 0.0f;
+        const auto lfo2ValueNow = params.lfo2Enabled ? lfoValue (params.lfo2Shape, lfoPhaseFor (1)) : 0.0f;
+        const auto lfo3ValueNow = params.lfo3Enabled ? lfoValue (params.lfo3Shape, lfoPhaseFor (2)) : 0.0f;
 
-    applyLfoDestination (params.lfo1Destination, params.lfo1AssignDestination, lfo1ValueNow * params.lfo1Amount);
-    applyLfoDestination (params.lfo2Destination, params.lfo2AssignDestination, lfo2ValueNow * params.lfo2Amount);
-    applyLfoDestination (params.lfo3Destination, params.lfo3AssignDestination, lfo3ValueNow * params.lfo3Amount);
-
-    auto sourceValueForMatrix = [&] (int source) -> float
-    {
-        switch (static_cast<MatrixSource> (source))
+        auto applyLfoDestination = [&] (int destination, int assignDestination, float value)
         {
-            case MatrixSource::lfo1: return lfo1ValueNow;
-            case MatrixSource::lfo2: return lfo2ValueNow;
-            case MatrixSource::lfo3: return lfo3ValueNow;
-            case MatrixSource::filterEnv: return filtEnv;
-            case MatrixSource::ampEnv: return ampEnv;
-            case MatrixSource::velocity: return voice.velocity;
-            case MatrixSource::note: return juce::jmap (static_cast<float> (voice.midiNote), 24.0f, 96.0f, -1.0f, 1.0f);
-            case MatrixSource::random:
+            switch (destination)
             {
-                const auto randomPhase = std::sin ((static_cast<float> (voice.midiNote) * 17.31f) + (voice.noteAge * 13.7f));
-                return juce::jlimit (-1.0f, 1.0f, randomPhase);
+                case 0: applyMatrixDestination (static_cast<int> (MatrixDestination::osc1Pitch), value); break;
+                case 1: applyMatrixDestination (static_cast<int> (MatrixDestination::osc23Pitch), value); break;
+                case 2: applyMatrixDestination (static_cast<int> (MatrixDestination::pulseWidth), value); break;
+                case 3: applyMatrixDestination (static_cast<int> (MatrixDestination::resonance), value); break;
+                case 4: applyMatrixDestination (static_cast<int> (MatrixDestination::filterGain), value); break;
+                case 5: applyMatrixDestination (static_cast<int> (MatrixDestination::cutoff1), value); break;
+                case 6: applyMatrixDestination (static_cast<int> (MatrixDestination::cutoff2), value); break;
+                case 7: applyMatrixDestination (static_cast<int> (MatrixDestination::shape), value); break;
+                case 8: applyMatrixDestination (static_cast<int> (MatrixDestination::fmAmount), value); break;
+                case 9: applyMatrixDestination (static_cast<int> (MatrixDestination::panorama), value); break;
+                case 10: applyMatrixDestination (assignDestination, value); break;
+                default: break;
             }
-            case MatrixSource::off:
-            default:
-                return 0.0f;
-        }
-    };
+        };
 
-    for (const auto& slot : params.modulationMatrix)
-    {
-        const auto sourceValue = sourceValueForMatrix (slot.source);
-        if (std::abs (sourceValue) < 0.00001f)
-            continue;
+        applyLfoDestination (params.lfo1Destination, params.lfo1AssignDestination, lfo1ValueNow * params.lfo1Amount);
+        applyLfoDestination (params.lfo2Destination, params.lfo2AssignDestination, lfo2ValueNow * params.lfo2Amount);
+        applyLfoDestination (params.lfo3Destination, params.lfo3AssignDestination, lfo3ValueNow * params.lfo3Amount);
 
-        for (const auto& target : slot.targets)
+        auto sourceValueForMatrix = [&] (int source) -> float
         {
-            if (std::abs (target.amount) < 0.00001f)
+            switch (static_cast<MatrixSource> (source))
+            {
+                case MatrixSource::lfo1: return lfo1ValueNow;
+                case MatrixSource::lfo2: return lfo2ValueNow;
+                case MatrixSource::lfo3: return lfo3ValueNow;
+                case MatrixSource::filterEnv: return filtEnv;
+                case MatrixSource::ampEnv: return ampEnv;
+                case MatrixSource::velocity: return voice.velocity;
+                case MatrixSource::note: return juce::jmap (static_cast<float> (voice.midiNote), 24.0f, 96.0f, -1.0f, 1.0f);
+                case MatrixSource::random:
+                {
+                    const auto randomPhase = std::sin ((static_cast<float> (voice.midiNote) * 17.31f) + (voice.noteAge * 13.7f));
+                    return juce::jlimit (-1.0f, 1.0f, randomPhase);
+                }
+                case MatrixSource::off:
+                default:
+                    return 0.0f;
+            }
+        };
+
+        for (const auto& slot : params.modulationMatrix)
+        {
+            const auto sourceValue = sourceValueForMatrix (slot.source);
+            if (std::abs (sourceValue) < 0.00001f)
                 continue;
-            applyMatrixDestination (target.destination, sourceValue * target.amount);
+
+            for (const auto& target : slot.targets)
+            {
+                if (std::abs (target.amount) < 0.00001f)
+                    continue;
+                applyMatrixDestination (target.destination, sourceValue * target.amount);
+            }
+        }
+    }
+    else
+    {
+        if (params.lfo1Enabled && std::abs (params.lfo1Amount) > 0.00001f)
+        {
+            const auto lfo1ValueNow = lfoValue (params.lfo1Shape, lfoPhaseFor (0));
+            applyMatrixDestination (static_cast<int> (MatrixDestination::osc1Pitch), lfo1ValueNow * params.lfo1Amount);
+        }
+
+        if (params.lfo2Enabled && std::abs (params.lfo2Amount) > 0.00001f)
+        {
+            const auto lfo2ValueNow = lfoValue (params.lfo2Shape, lfoPhaseFor (1));
+            applyMatrixDestination (static_cast<int> (MatrixDestination::cutoff1), lfo2ValueNow * params.lfo2Amount);
+        }
+
+        if (params.lfo3Enabled && std::abs (params.lfo3Amount) > 0.00001f)
+        {
+            const auto lfo3ValueNow = lfoValue (params.lfo3Shape, lfoPhaseFor (2));
+            applyMatrixDestination (static_cast<int> (MatrixDestination::ampLevel), lfo3ValueNow * params.lfo3Amount);
         }
     }
 
@@ -5435,51 +5473,6 @@ void AdvancedVSTiAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     applyPendingUiActions (midiMessages, buffer.getNumSamples());
     keyboardState.processNextMidiBuffer (midiMessages, 0, buffer.getNumSamples(), true);
 
-    leftFilter.setResonance (renderParams.resonance);
-    rightFilter.setResonance (renderParams.resonance);
-    leftFilterCascade.setResonance (renderParams.resonance);
-    rightFilterCascade.setResonance (renderParams.resonance);
-    leftFilter2.setResonance (renderParams.resonance);
-    rightFilter2.setResonance (renderParams.resonance);
-    leftFilter2Cascade.setResonance (renderParams.resonance);
-    rightFilter2Cascade.setResonance (renderParams.resonance);
-
-    chorusLeft.setRate (0.12f + renderParams.fxIntensity * 1.8f);
-    chorusRight.setRate (0.14f + renderParams.fxIntensity * 1.7f);
-    chorusLeft.setDepth (0.1f + renderParams.fxIntensity * 0.75f);
-    chorusRight.setDepth (0.12f + renderParams.fxIntensity * 0.72f);
-    chorusLeft.setCentreDelay (6.0f + renderParams.fxIntensity * 12.0f);
-    chorusRight.setCentreDelay (7.0f + renderParams.fxIntensity * 11.0f);
-    chorusLeft.setFeedback (0.05f + renderParams.fxIntensity * 0.18f);
-    chorusRight.setFeedback (0.04f + renderParams.fxIntensity * 0.18f);
-
-    flangerLeft.setRate (0.04f + renderParams.fxIntensity * 0.7f);
-    flangerRight.setRate (0.05f + renderParams.fxIntensity * 0.75f);
-    flangerLeft.setDepth (0.2f + renderParams.fxIntensity * 0.78f);
-    flangerRight.setDepth (0.22f + renderParams.fxIntensity * 0.74f);
-    flangerLeft.setCentreDelay (1.2f + renderParams.fxIntensity * 3.1f);
-    flangerRight.setCentreDelay (1.4f + renderParams.fxIntensity * 2.8f);
-    flangerLeft.setFeedback (0.08f + renderParams.fxIntensity * 0.42f);
-    flangerRight.setFeedback (0.08f + renderParams.fxIntensity * 0.42f);
-
-    phaserLeft.setRate (0.08f + renderParams.fxIntensity * 1.3f);
-    phaserRight.setRate (0.09f + renderParams.fxIntensity * 1.35f);
-    phaserLeft.setDepth (0.15f + renderParams.fxIntensity * 0.72f);
-    phaserRight.setDepth (0.17f + renderParams.fxIntensity * 0.68f);
-    phaserLeft.setCentreFrequency (400.0f + renderParams.fxIntensity * 1600.0f);
-    phaserRight.setCentreFrequency (520.0f + renderParams.fxIntensity * 1500.0f);
-    phaserLeft.setFeedback (0.05f + renderParams.fxIntensity * 0.25f);
-    phaserRight.setFeedback (0.05f + renderParams.fxIntensity * 0.25f);
-
-    juce::Reverb::Parameters reverbParams;
-    reverbParams.roomSize = 0.2f + renderParams.reverbMix * 0.65f;
-    reverbParams.damping = 0.25f + renderParams.fxIntensity * 0.5f;
-    reverbParams.wetLevel = 1.0f;
-    reverbParams.dryLevel = 0.0f;
-    reverbParams.width = 0.8f;
-    reverbParams.freezeMode = 0.0f;
-    reverb.setParameters (reverbParams);
-
     bool bypassFilter = false;
     if constexpr (supportsOffFilterChoice())
     {
@@ -5798,38 +5791,17 @@ void AdvancedVSTiAudioProcessor::applyAdvancedEffects (juce::AudioBuffer<float>&
     reverbParams.freezeMode = 0.0f;
     reverb.setParameters (reverbParams);
 
-    lowEqLeft.coefficients = juce::dsp::IIR::Coefficients<float>::makeLowShelf (currentSampleRate,
-                                                                                 juce::jlimit (40.0f, 1200.0f, renderParams.lowEqFreq),
-                                                                                 juce::jlimit (0.3f, 2.5f, renderParams.lowEqQ),
-                                                                                 juce::Decibels::decibelsToGain (renderParams.lowEqGainDb));
-    lowEqRight.coefficients = juce::dsp::IIR::Coefficients<float>::makeLowShelf (currentSampleRate,
-                                                                                  juce::jlimit (40.0f, 1200.0f, renderParams.lowEqFreq),
-                                                                                  juce::jlimit (0.3f, 2.5f, renderParams.lowEqQ),
-                                                                                  juce::Decibels::decibelsToGain (renderParams.lowEqGainDb));
-    midEqLeft.coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter (currentSampleRate,
-                                                                                   juce::jlimit (120.0f, 8000.0f, renderParams.midEqFreq),
-                                                                                   juce::jlimit (0.3f, 8.0f, renderParams.midEqQ),
-                                                                                   juce::Decibels::decibelsToGain (renderParams.midEqGainDb));
-    midEqRight.coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter (currentSampleRate,
-                                                                                    juce::jlimit (120.0f, 8000.0f, renderParams.midEqFreq),
-                                                                                    juce::jlimit (0.3f, 8.0f, renderParams.midEqQ),
-                                                                                    juce::Decibels::decibelsToGain (renderParams.midEqGainDb));
-    highEqLeft.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (currentSampleRate,
-                                                                                   juce::jlimit (1200.0f, 16000.0f, renderParams.highEqFreq),
-                                                                                   juce::jlimit (0.3f, 2.5f, renderParams.highEqQ),
-                                                                                   juce::Decibels::decibelsToGain (renderParams.highEqGainDb));
-    highEqRight.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (currentSampleRate,
-                                                                                    juce::jlimit (1200.0f, 16000.0f, renderParams.highEqFreq),
-                                                                                    juce::jlimit (0.3f, 2.5f, renderParams.highEqQ),
-                                                                                    juce::Decibels::decibelsToGain (renderParams.highEqGainDb));
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+        refreshEqFiltersIfNeeded();
 
     if (fxMix > 0.0001f)
     {
         if (renderParams.fxType == 3 || renderParams.fxType == 4 || renderParams.fxType == 5)
         {
-            juce::AudioBuffer<float> wetBuffer;
-            wetBuffer.makeCopyOf (buffer, true);
-            juce::dsp::AudioBlock<float> wetBlock (wetBuffer);
+            ensureWetScratchBufferSize (2, numSamples);
+            wetScratchBuffer.copyFrom (0, 0, buffer, 0, 0, numSamples);
+            wetScratchBuffer.copyFrom (1, 0, buffer, 1, 0, numSamples);
+            juce::dsp::AudioBlock<float> wetBlock (wetScratchBuffer);
             auto leftBlock = wetBlock.getSingleChannelBlock (0);
             auto rightBlock = wetBlock.getSingleChannelBlock (1);
             juce::dsp::ProcessContextReplacing<float> leftContext (leftBlock);
@@ -5851,10 +5823,12 @@ void AdvancedVSTiAudioProcessor::applyAdvancedEffects (juce::AudioBuffer<float>&
                 flangerRight.process (rightContext);
             }
 
+            const auto* wetLeft = wetScratchBuffer.getReadPointer (0);
+            const auto* wetRight = wetScratchBuffer.getReadPointer (1);
             for (int sample = 0; sample < numSamples; ++sample)
             {
-                left[sample] = juce::jmap (fxMix, left[sample], wetBuffer.getSample (0, sample));
-                right[sample] = juce::jmap (fxMix, right[sample], wetBuffer.getSample (1, sample));
+                left[sample] = juce::jmap (fxMix, left[sample], wetLeft[sample]);
+                right[sample] = juce::jmap (fxMix, right[sample], wetRight[sample]);
             }
         }
         else
@@ -5919,14 +5893,17 @@ void AdvancedVSTiAudioProcessor::applyAdvancedEffects (juce::AudioBuffer<float>&
         }
     }
 
-    for (int sample = 0; sample < numSamples; ++sample)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
     {
-        left[sample] = lowEqLeft.processSample (left[sample]);
-        right[sample] = lowEqRight.processSample (right[sample]);
-        left[sample] = midEqLeft.processSample (left[sample]);
-        right[sample] = midEqRight.processSample (right[sample]);
-        left[sample] = highEqLeft.processSample (left[sample]);
-        right[sample] = highEqRight.processSample (right[sample]);
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            left[sample] = lowEqLeft.processSample (left[sample]);
+            right[sample] = lowEqRight.processSample (right[sample]);
+            left[sample] = midEqLeft.processSample (left[sample]);
+            right[sample] = midEqRight.processSample (right[sample]);
+            left[sample] = highEqLeft.processSample (left[sample]);
+            right[sample] = highEqRight.processSample (right[sample]);
+        }
     }
 
     if (delaySend > 0.0001f && delayBuffer.getNumSamples() > 0)
@@ -5956,14 +5933,80 @@ void AdvancedVSTiAudioProcessor::applyAdvancedEffects (juce::AudioBuffer<float>&
 
     if (reverbMix > 0.0001f)
     {
-        juce::AudioBuffer<float> wetBuffer;
-        wetBuffer.makeCopyOf (buffer, true);
-        reverb.processStereo (wetBuffer.getWritePointer (0), wetBuffer.getWritePointer (1), wetBuffer.getNumSamples());
+        ensureWetScratchBufferSize (2, numSamples);
+        wetScratchBuffer.copyFrom (0, 0, buffer, 0, 0, numSamples);
+        wetScratchBuffer.copyFrom (1, 0, buffer, 1, 0, numSamples);
+        reverb.processStereo (wetScratchBuffer.getWritePointer (0), wetScratchBuffer.getWritePointer (1), numSamples);
 
         buffer.applyGain (1.0f - reverbMix);
-        buffer.addFrom (0, 0, wetBuffer, 0, 0, wetBuffer.getNumSamples(), reverbMix);
-        buffer.addFrom (1, 0, wetBuffer, 1, 0, wetBuffer.getNumSamples(), reverbMix);
+        buffer.addFrom (0, 0, wetScratchBuffer, 0, 0, numSamples, reverbMix);
+        buffer.addFrom (1, 0, wetScratchBuffer, 1, 0, numSamples, reverbMix);
     }
+}
+
+void AdvancedVSTiAudioProcessor::ensureWetScratchBufferSize (int numChannels, int numSamples)
+{
+    if (wetScratchBuffer.getNumChannels() >= numChannels && wetScratchBuffer.getNumSamples() >= numSamples)
+        return;
+
+    wetScratchBuffer.setSize (numChannels, numSamples, false, false, true);
+}
+
+void AdvancedVSTiAudioProcessor::refreshEqFiltersIfNeeded()
+{
+    const auto lowEqFreq = juce::jlimit (40.0f, 1200.0f, renderParams.lowEqFreq);
+    const auto lowEqQ = juce::jlimit (0.3f, 2.5f, renderParams.lowEqQ);
+    const auto midEqFreq = juce::jlimit (120.0f, 8000.0f, renderParams.midEqFreq);
+    const auto midEqQ = juce::jlimit (0.3f, 8.0f, renderParams.midEqQ);
+    const auto highEqFreq = juce::jlimit (1200.0f, 16000.0f, renderParams.highEqFreq);
+    const auto highEqQ = juce::jlimit (0.3f, 2.5f, renderParams.highEqQ);
+
+    if (cachedEqSettings.valid
+        && std::abs (cachedEqSettings.sampleRate - currentSampleRate) <= 0.5
+        && nearlyEqual (cachedEqSettings.lowEqGainDb, renderParams.lowEqGainDb)
+        && nearlyEqual (cachedEqSettings.lowEqFreq, lowEqFreq)
+        && nearlyEqual (cachedEqSettings.lowEqQ, lowEqQ)
+        && nearlyEqual (cachedEqSettings.midEqGainDb, renderParams.midEqGainDb)
+        && nearlyEqual (cachedEqSettings.midEqFreq, midEqFreq)
+        && nearlyEqual (cachedEqSettings.midEqQ, midEqQ)
+        && nearlyEqual (cachedEqSettings.highEqGainDb, renderParams.highEqGainDb)
+        && nearlyEqual (cachedEqSettings.highEqFreq, highEqFreq)
+        && nearlyEqual (cachedEqSettings.highEqQ, highEqQ))
+    {
+        return;
+    }
+
+    auto lowCoefficients = juce::dsp::IIR::Coefficients<float>::makeLowShelf (currentSampleRate,
+                                                                              lowEqFreq,
+                                                                              lowEqQ,
+                                                                              juce::Decibels::decibelsToGain (renderParams.lowEqGainDb));
+    auto midCoefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter (currentSampleRate,
+                                                                                midEqFreq,
+                                                                                midEqQ,
+                                                                                juce::Decibels::decibelsToGain (renderParams.midEqGainDb));
+    auto highCoefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (currentSampleRate,
+                                                                                highEqFreq,
+                                                                                highEqQ,
+                                                                                juce::Decibels::decibelsToGain (renderParams.highEqGainDb));
+
+    lowEqLeft.coefficients = lowCoefficients;
+    lowEqRight.coefficients = lowCoefficients;
+    midEqLeft.coefficients = midCoefficients;
+    midEqRight.coefficients = midCoefficients;
+    highEqLeft.coefficients = highCoefficients;
+    highEqRight.coefficients = highCoefficients;
+
+    cachedEqSettings.valid = true;
+    cachedEqSettings.sampleRate = currentSampleRate;
+    cachedEqSettings.lowEqGainDb = renderParams.lowEqGainDb;
+    cachedEqSettings.lowEqFreq = lowEqFreq;
+    cachedEqSettings.lowEqQ = lowEqQ;
+    cachedEqSettings.midEqGainDb = renderParams.midEqGainDb;
+    cachedEqSettings.midEqFreq = midEqFreq;
+    cachedEqSettings.midEqQ = midEqQ;
+    cachedEqSettings.highEqGainDb = renderParams.highEqGainDb;
+    cachedEqSettings.highEqFreq = highEqFreq;
+    cachedEqSettings.highEqQ = highEqQ;
 }
 
 void AdvancedVSTiAudioProcessor::applyEnvelopeSettings()
