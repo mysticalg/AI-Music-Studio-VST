@@ -16,10 +16,7 @@ The shared source now builds these VST3 products:
 
 - `Virus Synth`
 - `AI Drum Machine`
-- `AI 808 Machine`
 - `AI Bass Synth`
-- `AI TB303`
-- `AI String Synth`
 - `AI Lead Synth`
 - `AI Pad Synth`
 - `AI Pluck Synth`
@@ -33,7 +30,7 @@ The shared source now builds these VST3 products:
 - `AI Bass Guitar`
 - `AI Organ`
 
-The packaged variants use flavor-specific defaults. `AI Drum Machine` is now voiced as a punchier 909-style kit, `AI 808 Machine` adds longer analogue-style low-end drums, and `AI TB303` adds a more resonant acid-bass flavor. The sampler variant adds internal sample-bank playback with loop-window controls, so it behaves like a compact ROMpler/sampler without depending on external content. The acoustic suite now covers `AI Piano`, `AI Strings`, `AI Violin`, `AI Flute`, `AI Saxophone`, `AI Bass Guitar`, and `AI Organ`: piano uses the bundled Splendid Grand library, and the others can load open multisample libraries from `.cache/OpenInstrumentSamples` for real SFZ-based playback.
+The packaged lineup has been trimmed to the newer primary instruments rather than overlapping variants. `AI Drum Machine` now carries the drum-machine slot, `AI Bass Synth` covers the mono synth-bass role, and `AI Strings` is the main string-family instrument. The sampler variant adds internal sample-bank playback with loop-window controls, so it behaves like a compact ROMpler/sampler without depending on external content. The acoustic suite now covers `AI Piano`, `AI Strings`, `AI Violin`, `AI Flute`, `AI Saxophone`, `AI Bass Guitar`, and `AI Organ`: piano uses the bundled Splendid Grand library, and the others can load open multisample libraries from `.cache/OpenInstrumentSamples` for real SFZ-based playback.
 
 ## Fetch acoustic sample libraries
 
@@ -97,6 +94,41 @@ cmake --build build --config Release
 
 4. JUCE creates one `*.vst3` bundle per target in the build artifacts.
 5. If you are using this repo as the `plugins/AdvancedVSTi` submodule inside AI Music Studio, copy the desired `.vst3` bundles into `../vsti/` from the parent app repo to package them with the app.
+
+## Build a Windows installer
+
+The runtime now looks for shared sample data in this order:
+
+- bundled plugin resources inside the `.vst3` itself,
+- `%ProgramData%\AI Music Studio\VSTData\...`,
+- and explicit overrides from `AI_MUSIC_STUDIO_VST_DATA_ROOT`, `AI_MUSIC_STUDIO_OPEN_INSTRUMENT_SAMPLES`, `AI_MUSIC_STUDIO_PIANO_LIBRARY`, or `AI_MUSIC_STUDIO_VEC1_LIBRARY`.
+
+That lets a Windows installer place every plugin in `C:\Program Files\Common Files\VST3` while keeping shared libraries in `%ProgramData%` where the DAW-facing VSTs can still resolve them consistently.
+
+1. Build the Windows release artifacts:
+
+```bash
+cmake -S . -B build -DJUCE_DIR=C:/dev/JUCE
+cmake --build build --config Release
+```
+
+2. Collect the built `.vst3` bundles into the expected packaging layout:
+
+```bash
+python scripts/package_platform_builds.py --build-dir build --platform windows --output-dir dist/release-input/windows
+```
+
+3. Install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and build the installer:
+
+```bash
+python scripts/build_windows_installer.py --package-root dist/release-input/windows --build-dir build --fetch-open-instrument-samples
+```
+
+If `AI Piano` or `AI VEC1 Drum Pads` are not already carrying their sample libraries inside the built `.vst3` bundles, pass the source roots explicitly with `--piano-library-dir` and `--vec1-library-dir`, or configure CMake with `-DAIMS_PIANO_LIBRARY_DIR=...` and `-DAIMS_VEC1_LIBRARY_DIR=...` before building.
+
+Use `--skip-compile` if you only want the staged installer layout plus the generated `.iss` file. A successful compiled build writes `AI-Music-Studio-Bundled-Instruments-Windows-Installer-<version>.exe` into `dist/windows-installer/`.
+
+The installer now lets the user choose either the default VST3 target folder (`C:\Program Files\Common Files\VST3`) or a custom VST3 folder during setup. Standalone `.exe` builds still install into `C:\Program Files\AI Music Studio\Standalone\...`, and shared sample libraries still install into `%ProgramData%\AI Music Studio\VSTData`. There is no separate VST3 registration step beyond copying the bundles into the chosen VST3 folder and rescanning plugins in the DAW if needed.
 
 ## Render catalog screenshots locally
 

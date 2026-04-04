@@ -10,12 +10,7 @@ juce::String normalizedPluginName (const AdvancedVSTiAudioProcessor& processor)
 
 bool isAcousticStringsPluginName (const juce::String& name)
 {
-    return name.contains ("ai strings") && ! name.contains ("string synth");
-}
-
-bool isStringSynthPluginName (const juce::String& name)
-{
-    return name.contains ("string synth");
+    return name.contains ("ai strings");
 }
 
 int scaledInt (float value, float scale)
@@ -26,6 +21,72 @@ int scaledInt (float value, float scale)
 float scaledFloat (float value, float scale)
 {
     return value * scale;
+}
+
+float clamp01 (float value)
+{
+    return juce::jlimit (0.0f, 1.0f, value);
+}
+
+float normalizedRange (float value, float minimum, float maximum)
+{
+    if (maximum <= minimum)
+        return 0.0f;
+
+    return clamp01 ((value - minimum) / (maximum - minimum));
+}
+
+juce::Point<float> plotPoint (juce::Rectangle<float> bounds, float xNorm, float yNorm)
+{
+    return {
+        juce::jmap (clamp01 (xNorm), bounds.getX(), bounds.getRight()),
+        juce::jmap (clamp01 (yNorm), bounds.getBottom(), bounds.getY())
+    };
+}
+
+float logFrequencyNorm (float frequencyHz, float minimumHz = 40.0f, float maximumHz = 16000.0f)
+{
+    const auto safeFrequency = juce::jlimit (minimumHz, maximumHz, frequencyHz);
+    const auto minLog = std::log (minimumHz);
+    const auto maxLog = std::log (maximumHz);
+    return clamp01 (static_cast<float> ((std::log (safeFrequency) - minLog) / (maxLog - minLog)));
+}
+
+float previewLfoValue (int shape, float phase)
+{
+    const auto wrapped = phase - std::floor (phase);
+    if (shape == 1)
+        return 1.0f - 4.0f * std::abs (wrapped - 0.5f);
+    if (shape == 2)
+        return 2.0f * wrapped - 1.0f;
+    if (shape == 3)
+    {
+        const auto hashed = std::sin ((wrapped + 1.0f) * 12345.6789f) * 43758.5453f;
+        return 2.0f * (hashed - std::floor (hashed)) - 1.0f;
+    }
+    if (shape == 4)
+        return wrapped < 0.5f ? 1.0f : -1.0f;
+    return std::sin (juce::MathConstants<float>::twoPi * wrapped);
+}
+
+float previewSaturate (float value, int saturationType, float drive)
+{
+    const auto driven = value * drive;
+
+    switch (juce::jlimit (0, 3, saturationType))
+    {
+        case 1:
+            return std::tanh (driven * 0.92f) * 0.94f;
+        case 2:
+            return std::atan (driven * 1.35f) * 0.78f;
+        case 3:
+        {
+            const auto folded = std::abs (std::fmod (driven + 1.0f, 4.0f) - 2.0f) - 1.0f;
+            return std::tanh (folded * 1.05f) * 0.9f;
+        }
+        default:
+            return std::tanh (driven) * 0.94f;
+    }
 }
 
 juce::String buildControlTooltip (const juce::String& title, const juce::String& hint)
@@ -90,7 +151,11 @@ constexpr int kStandaloneKeyboardExtraHeight = 92;
 constexpr int kFixedInstrumentWidth = 1040;
 constexpr int kFixedInstrumentOuterPadding = 24;
 constexpr int kFixedInstrumentHeroHeight = 96;
+constexpr int kFixedInstrumentFxHeroHeight = 84;
 constexpr int kFixedInstrumentHeroGap = 18;
+constexpr int kFixedInstrumentFxHeroGap = 14;
+constexpr int kFixedInstrumentFxVisualizerHeight = 184;
+constexpr int kFixedInstrumentFxVisualizerGap = 20;
 constexpr int kFixedInstrumentChoiceWidth = 236;
 constexpr int kFixedInstrumentChoiceHeight = 82;
 constexpr int kFixedInstrumentChoiceGap = 16;
@@ -148,10 +213,13 @@ int fixedInstrumentKnobRowWidth (int knobCount)
            + ((knobCount - 1) * kFixedInstrumentKnobVisualGap);
 }
 
-int fixedInstrumentKnobColumns (int knobCount)
+int fixedInstrumentKnobColumns (int knobCount, bool forceSingleRow = false)
 {
     if (knobCount <= 0)
         return 1;
+
+    if (forceSingleRow)
+        return knobCount;
 
     if (knobCount >= 30)
         return 6;
@@ -1609,7 +1677,10 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
         }
         else
         {
-            const int knobColumns = fixedInstrumentKnobColumns (knobCards.size());
+            const bool nativeFxLayout = audioProcessor.isNativeFxFlavor();
+            const int heroHeight = nativeFxLayout ? kFixedInstrumentFxHeroHeight : kFixedInstrumentHeroHeight;
+            const int heroGap = nativeFxLayout ? kFixedInstrumentFxHeroGap : kFixedInstrumentHeroGap;
+            const int knobColumns = fixedInstrumentKnobColumns (knobCards.size(), audioProcessor.isNativeFxFlavor());
             const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);
             const int choiceRowWidth = choiceCards.isEmpty()
                                            ? 0
@@ -1621,9 +1692,10 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
 
             defaultWidth = juce::jmax (kFixedInstrumentWidth, juce::jmax (choiceRowWidth, knobGridWidth));
             defaultHeight = kFixedInstrumentOuterPadding
-                            + kFixedInstrumentHeroHeight
-                            + kFixedInstrumentHeroGap
+                            + heroHeight
+                            + heroGap
                             + (choiceCards.isEmpty() ? 0 : (kFixedInstrumentChoiceHeight + kFixedInstrumentChoiceBottomGap))
+                            + (nativeFxLayout ? (kFixedInstrumentFxVisualizerHeight + kFixedInstrumentFxVisualizerGap) : 0)
                             + (knobRows * kFixedInstrumentKnobRowHeight)
                             + ((knobRows - 1) * kFixedInstrumentKnobRowGap)
                             + kFixedInstrumentBottomPadding;
@@ -1633,8 +1705,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
         maxWidth = defaultWidth;
         maxHeight = defaultHeight;
     }
-    else if (isStringSynthPluginName (normalizedPluginName (audioProcessor))
-             || isAcousticStringsPluginName (normalizedPluginName (audioProcessor)))
+    else if (isAcousticStringsPluginName (normalizedPluginName (audioProcessor)))
     {
         defaultWidth = 1380;
         defaultHeight = 900;
@@ -1949,12 +2020,18 @@ bool AdvancedVSTiAudioProcessorEditor::usesFixedInstrumentLayout() const noexcep
 
 bool AdvancedVSTiAudioProcessorEditor::usesStandalonePreviewKeyboard() const noexcept
 {
-    return juce::JUCEApplicationBase::isStandaloneApp() && usesFixedInstrumentLayout() && ! isTribute909();
+    return juce::JUCEApplicationBase::isStandaloneApp()
+           && usesFixedInstrumentLayout()
+           && ! isTribute909()
+           && ! audioProcessor.isNativeFxFlavor();
 }
 
 void AdvancedVSTiAudioProcessorEditor::timerCallback()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (audioProcessor.isNativeFxFlavor() && ! nativeFxVisualizerBounds.isEmpty())
+        repaint (nativeFxVisualizerBounds.expanded (2));
 
     if (usesFixedInstrumentLayout()
         && fixedInstrumentOsdUntilMs > 0.0
@@ -4037,41 +4114,71 @@ AdvancedVSTiAudioProcessorEditor::Theme AdvancedVSTiAudioProcessorEditor::buildT
         return padMachine;
     }
 
-    if (name.contains ("808"))
-    {
-        Theme tribute {
-            "AI 808 Machine",
-            "Retro drum macros on a lighter rhythm-composer faceplate with longer tails and deeper low-end.",
-            juce::Colour::fromRGB (245, 138, 57), juce::Colour::fromRGB (255, 197, 136),
-            juce::Colour::fromRGB (233, 231, 224), juce::Colour::fromRGB (227, 225, 216), juce::Colour::fromRGB (84, 88, 86),
-            juce::Colour::fromRGB (37, 40, 41), juce::Colour::fromRGB (117, 118, 112)
-        };
-        tribute.faceplate = juce::Colour::fromRGB (236, 234, 227);
-        tribute.trim = juce::Colour::fromRGB (123, 127, 122);
-        tribute.legend = juce::Colour::fromRGB (235, 132, 48);
-        tribute.knobBody = juce::Colour::fromRGB (54, 56, 58);
-        tribute.knobCap = juce::Colour::fromRGB (82, 82, 79);
-        tribute.tribute909 = true;
-        return tribute;
-    }
+    if (name.contains ("delay"))
+        return { "AI Delay", "Stereo native delay with tone-shaped feedback, crossfeed width, and mix staging for inserts and throws.",
+                 juce::Colour::fromRGB (117, 214, 220), juce::Colour::fromRGB (55, 146, 154),
+                 juce::Colour::fromRGB (14, 20, 22), juce::Colour::fromRGB (21, 31, 34), juce::Colour::fromRGB (53, 97, 100),
+                 juce::Colours::white, juce::Colour::fromRGB (188, 216, 218) };
 
-    if (name.contains ("303"))
-    {
-        Theme tribute {
-            "AI TB303 Tribute",
-            "A respectful nod to the silver box: squelchy cutoff, snappy decay, and that unmistakable acid front panel.",
-            juce::Colour::fromRGB (255, 116, 38), juce::Colour::fromRGB (255, 190, 86),
-            juce::Colour::fromRGB (44, 46, 48), juce::Colour::fromRGB (221, 217, 204), juce::Colour::fromRGB (145, 87, 58),
-            juce::Colour::fromRGB (36, 34, 32), juce::Colour::fromRGB (119, 94, 73)
-        };
-        tribute.faceplate = juce::Colour::fromRGB (220, 216, 202);
-        tribute.trim = juce::Colour::fromRGB (133, 82, 56);
-        tribute.legend = juce::Colour::fromRGB (195, 83, 37);
-        tribute.knobBody = juce::Colour::fromRGB (235, 232, 224);
-        tribute.knobCap = juce::Colour::fromRGB (56, 56, 58);
-        tribute.tribute303 = true;
-        return tribute;
-    }
+    if (name.contains ("reverb"))
+        return { "AI Reverb", "Native hall and room space with longer tails, damping control, and stereo width tuned for mix use.",
+                 juce::Colour::fromRGB (140, 194, 255), juce::Colour::fromRGB (72, 121, 182),
+                 juce::Colour::fromRGB (15, 19, 25), juce::Colour::fromRGB (23, 30, 39), juce::Colour::fromRGB (50, 79, 109),
+                 juce::Colours::white, juce::Colour::fromRGB (193, 210, 230) };
+
+    if (name.contains ("chorus"))
+        return { "AI Chorus", "Wide modulation for synths, vocals, and guitars with macro controls for rate, depth, color, and spread.",
+                 juce::Colour::fromRGB (132, 229, 188), juce::Colour::fromRGB (46, 149, 108),
+                 juce::Colour::fromRGB (14, 22, 20), juce::Colour::fromRGB (22, 33, 31), juce::Colour::fromRGB (47, 98, 80),
+                 juce::Colours::white, juce::Colour::fromRGB (190, 222, 208) };
+
+    if (name.contains ("flanger"))
+        return { "AI Flanger", "Jet sweeps and metallic combing with wider stereo movement and enough feedback for obvious motion.",
+                 juce::Colour::fromRGB (244, 181, 102), juce::Colour::fromRGB (181, 108, 38),
+                 juce::Colour::fromRGB (22, 18, 16), juce::Colour::fromRGB (33, 27, 22), juce::Colour::fromRGB (102, 68, 40),
+                 juce::Colours::white, juce::Colour::fromRGB (224, 205, 183) };
+
+    if (name.contains ("phaser"))
+        return { "AI Phaser", "Notch-swept stereo phase with enough rate, depth, and spread range for subtle shimmer or obvious swirl.",
+                 juce::Colour::fromRGB (190, 223, 127), juce::Colour::fromRGB (116, 154, 57),
+                 juce::Colour::fromRGB (18, 22, 16), juce::Colour::fromRGB (27, 33, 23), juce::Colour::fromRGB (73, 102, 44),
+                 juce::Colours::white, juce::Colour::fromRGB (208, 221, 188) };
+
+    if (name.contains ("overdrive"))
+        return { "AI Overdrive", "Softer front-end drive with mix staging and tone shaping for pushes that stay musical.",
+                 juce::Colour::fromRGB (255, 171, 85), juce::Colour::fromRGB (199, 110, 34),
+                 juce::Colour::fromRGB (22, 18, 16), juce::Colour::fromRGB (34, 27, 22), juce::Colour::fromRGB (109, 68, 34),
+                 juce::Colours::white, juce::Colour::fromRGB (225, 202, 175) };
+
+    if (name.contains ("distortion"))
+        return { "AI Distortion", "Harder native clip, fold, and drive modes aimed at modern synths, drums, and aggressive guitar tracks.",
+                 juce::Colour::fromRGB (255, 118, 106), juce::Colour::fromRGB (195, 67, 55),
+                 juce::Colour::fromRGB (24, 18, 18), juce::Colour::fromRGB (36, 24, 24), juce::Colour::fromRGB (110, 46, 44),
+                 juce::Colours::white, juce::Colour::fromRGB (225, 191, 190) };
+
+    if (name.contains ("compress"))
+        return { "AI Compressor", "Stereo glue compression with threshold, ratio, attack, release, makeup, and parallel blend.",
+                 juce::Colour::fromRGB (160, 198, 218), juce::Colour::fromRGB (76, 118, 143),
+                 juce::Colour::fromRGB (16, 20, 24), juce::Colour::fromRGB (24, 29, 35), juce::Colour::fromRGB (53, 81, 98),
+                 juce::Colours::white, juce::Colour::fromRGB (198, 211, 220) };
+
+    if (name.contains ("amp emulator"))
+        return { "AI Amp Emulator", "Native preamp, cabinet, and presence shaping for cleaner combo tones through crunch and stack weight.",
+                 juce::Colour::fromRGB (224, 183, 118), juce::Colour::fromRGB (155, 98, 42),
+                 juce::Colour::fromRGB (22, 18, 16), juce::Colour::fromRGB (34, 27, 22), juce::Colour::fromRGB (100, 68, 36),
+                 juce::Colours::white, juce::Colour::fromRGB (221, 204, 180) };
+
+    if (name.contains ("bit crusher"))
+        return { "AI Bit Crusher", "Sample-rate reduction and bit-depth decimation for lo-fi color, arcade grit, and broken-digital tone.",
+                 juce::Colour::fromRGB (120, 230, 170), juce::Colour::fromRGB (40, 150, 93),
+                 juce::Colour::fromRGB (13, 20, 17), juce::Colour::fromRGB (20, 31, 27), juce::Colour::fromRGB (42, 94, 72),
+                 juce::Colours::white, juce::Colour::fromRGB (187, 219, 201) };
+
+    if (name.contains ("rhythm gate"))
+        return { "AI Rhythm Gate", "Pattern-shaped chopping with rate, depth, floor, and stereo offset for pulsing movement and stutter beds.",
+                 juce::Colour::fromRGB (124, 216, 255), juce::Colour::fromRGB (42, 141, 189),
+                 juce::Colour::fromRGB (14, 19, 24), juce::Colour::fromRGB (22, 29, 36), juce::Colour::fromRGB (43, 80, 109),
+                 juce::Colours::white, juce::Colour::fromRGB (187, 208, 222) };
 
     if (name.contains ("drum"))
     {
@@ -4139,12 +4246,6 @@ AdvancedVSTiAudioProcessorEditor::Theme AdvancedVSTiAudioProcessorEditor::buildT
                  juce::Colour::fromRGB (14, 18, 18), juce::Colour::fromRGB (18, 28, 27), juce::Colour::fromRGB (30, 87, 71),
                  juce::Colours::white, juce::Colour::fromRGB (175, 212, 202) };
 
-    if (isStringSynthPluginName (name))
-        return { "AI String Synth", "Softer ensemble motion, longer blooms, and warmer control cards for layered pads.",
-                 juce::Colour::fromRGB (255, 210, 98), juce::Colour::fromRGB (198, 142, 49),
-                 juce::Colour::fromRGB (18, 18, 23), juce::Colour::fromRGB (28, 26, 23), juce::Colour::fromRGB (102, 75, 34),
-                 juce::Colours::white, juce::Colour::fromRGB (216, 203, 176) };
-
     if (name.contains ("lead"))
         return { "AI Lead Synth", "Brighter attack, extra edge, and a cleaner lead workflow with performance-focused knobs.",
                  juce::Colour::fromRGB (255, 117, 124), juce::Colour::fromRGB (190, 62, 84),
@@ -4189,13 +4290,67 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 {
     const auto name = normalizedPluginName (audioProcessor);
     std::vector<ChoiceSpec> specs;
+    const auto parameterChoiceValues = [this] (const juce::String& paramId)
+    {
+        juce::StringArray values;
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter (paramId)))
+            values = choice->choices;
+        return values;
+    };
+    auto addTimingChoices = [&specs, &parameterChoiceValues]
+    {
+        specs.push_back ({ "TIMEMODE", "Timing", "Free-rate or host-synced timing", parameterChoiceValues ("TIMEMODE"), {}, false, 0 });
+        specs.push_back ({ "TIMEDIV", "Division", "Straight, dotted, and triplet note values", parameterChoiceValues ("TIMEDIV"), {}, false, 0 });
+    };
 
     if (name.contains ("vec1"))
         return specs;
 
     const auto presetNames = audioProcessor.presetNames();
-    if (! presetNames.isEmpty())
+    if (presetNames.size() > 1)
         specs.push_back ({ "PRESET", "Preset", isTributeVirus() ? "Performance memory" : "Classic bundled patch", presetNames, {}, false, 0 });
+
+    if (name.contains ("delay"))
+    {
+        specs.push_back ({ "TIMEMODE", "Timing", "Free-rate or host-synced timing", parameterChoiceValues ("TIMEMODE"), {}, false, 0 });
+        specs.push_back ({ "TIMEDIV", "L Div", "Left delay note value", parameterChoiceValues ("TIMEDIV"), {}, false, 0 });
+        specs.push_back ({ "DELAYDIVRIGHT", "R Div", "Right delay note value", parameterChoiceValues ("DELAYDIVRIGHT"), {}, false, 0 });
+        specs.push_back ({ "DELAYFILTERLEFT", "L Filter", "Left feedback filter type", parameterChoiceValues ("DELAYFILTERLEFT"), {}, false, 0 });
+        specs.push_back ({ "DELAYFILTERRIGHT", "R Filter", "Right feedback filter type", parameterChoiceValues ("DELAYFILTERRIGHT"), {}, false, 0 });
+        return specs;
+    }
+
+    if (name.contains ("overdrive") || name.contains ("distortion"))
+    {
+        specs.push_back ({ "SATURATIONTYPE", "Clip Mode", "Transfer curve", { "Soft", "Warm", "Drive", "Fold" }, {}, false, 0 });
+        return specs;
+    }
+
+    if (name.contains ("amp emulator"))
+    {
+        specs.push_back ({ "AMPMODEL", "Amp Model", "Preamp / cabinet voice", { "Clean", "Crunch", "Stack", "Bass" }, {}, false, 0 });
+        specs.push_back ({ "SATURATIONTYPE", "Clip Mode", "Core saturation curve", { "Soft", "Warm", "Drive", "Fold" }, {}, false, 0 });
+        return specs;
+    }
+
+    if (name.contains ("rhythm gate"))
+    {
+        addTimingChoices();
+        specs.push_back ({ "LFO3SHAPE", "Gate Shape", "Envelope contour", { "Sine", "Triangle", "Saw", "Noise", "Square" }, {}, false, 0 });
+        return specs;
+    }
+
+    if (name.contains ("reverb")
+        || name.contains ("chorus")
+        || name.contains ("flanger")
+        || name.contains ("phaser"))
+    {
+        addTimingChoices();
+        return specs;
+    }
+
+    if (name.contains ("compress") || name.contains ("bit crusher"))
+        return specs;
 
     if (isTributeVirus())
     {
@@ -4210,14 +4365,6 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
         specs.push_back ({ "LFO2SHAPE", "LFO 2 Shape", "Secondary motion", { "Sine", "Triangle", "Saw", "Noise", "Square" }, { "SIN", "TRI", "SAW", "NOI", "SQR" }, true, 3 });
         specs.push_back ({ "ARPMODE", "Arp Mode", "Pattern motion", { "Up", "Down", "UpDown", "Random", "As Played", "Chord" }, { "UP", "DWN", "ALT", "RND", "PLY", "CHD" }, true, 2 });
         specs.push_back ({ "ARPPATTERN", "Arp Pattern", "Rhythmic preset pattern", { "Straight", "Offbeat", "Gallop", "Pulse", "Broken", "Triplet", "Stairs", "Wide" }, { "STR", "OFF", "GAL", "PLS", "BRK", "TRI", "STA", "WDE" }, true, 2 });
-        return specs;
-    }
-
-    if (name.contains ("303"))
-    {
-        specs.push_back ({ "OSCTYPE", "Waveform", "Switch the acid core source", { "Sine", "Saw", "Square", "Noise", "Sample" }, {}, false, 0 });
-        specs.push_back ({ "FILTERTYPE", "Filter Mode", "Tribute panel with modern filter options", { "LP", "BP", "HP", "Notch" }, {}, false, 0 });
-        specs.push_back ({ "FILTERSLOPE", "Slope", "Acid roll-off steepness", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
     }
 
@@ -4277,15 +4424,6 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
         return specs;
     }
 
-    if (isStringSynthPluginName (name))
-    {
-        specs.push_back ({ "OSCTYPE", "Oscillator", "Core ensemble source", { "Sine", "Saw", "Square", "Noise", "Sample" }, {}, false, 0 });
-        specs.push_back ({ "FILTERTYPE", "Filter", "Main timbre curve", { "LP", "BP", "HP", "Notch" }, {}, false, 0 });
-        specs.push_back ({ "FILTERSLOPE", "Slope", "Filter roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
-        specs.push_back ({ "FXTYPE", "FX Type", "Insert color", { "Off", "Distortion", "Character", "Chorus", "Phaser", "Flanger", "Ring Mod", "Freq Shift" }, {}, false, 0 });
-        return specs;
-    }
-
     if (name.contains ("sampler"))
     {
         specs.push_back ({ "SAMPLEBANK", "Source", "Generated sample bank", { "Dusty Keys", "Tape Choir", "Velvet Pluck", "Vox Chop", "Sub Stab", "Glass Bell" }, {}, false, 0 });
@@ -4294,7 +4432,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
         return specs;
     }
 
-    if (name.contains ("drum") || name.contains ("808"))
+    if (name.contains ("drum"))
     {
         specs.push_back ({ "FILTERTYPE", "Tone Filter", "Top-end response", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Filter steepness", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
@@ -4313,6 +4451,117 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
 
     if (name.contains ("vec1"))
         return {};
+
+    if (name.contains ("delay"))
+        return {
+            { "FXMIX", "Mix", "Dry / wet blend" },
+            { "DELAYTIME", "L Time", "Left echo spacing" },
+            { "DELAYTIMERIGHT", "R Time", "Right echo spacing" },
+            { "DELAYFEEDBACK", "L Feed", "Left repeat amount" },
+            { "DELAYFEEDBACKRIGHT", "R Feed", "Right repeat amount" },
+            { "DELAYCUTOFFLEFT", "L Cut", "Left feedback cutoff" },
+            { "DELAYCUTOFFRIGHT", "R Cut", "Right feedback cutoff" },
+            { "INPUTGAIN", "Input", "Pre-effect gain" },
+            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+        };
+
+    if (name.contains ("reverb"))
+        return {
+            { "FXMIX", "Mix", "Dry / wet blend" },
+            { "REVERBTIME", "Time", "Tail length" },
+            { "REVERBDAMP", "Damp", "High-end decay" },
+            { "FXSPREAD", "Width", "Stereo image" },
+            { "INPUTGAIN", "Input", "Pre-effect gain" },
+            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+        };
+
+    if (name.contains ("chorus"))
+        return {
+            { "FXMIX", "Mix", "Dry / wet blend" },
+            { "FXRATE", "Rate", "LFO speed" },
+            { "FXINTENSITY", "Depth", "Modulation depth" },
+            { "FXCOLOUR", "Color", "Delay color" },
+            { "FXSPREAD", "Spread", "Stereo offset" },
+            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+        };
+
+    if (name.contains ("flanger"))
+        return {
+            { "FXMIX", "Mix", "Dry / wet blend" },
+            { "FXRATE", "Rate", "Sweep speed" },
+            { "FXINTENSITY", "Depth", "Comb depth" },
+            { "FXCOLOUR", "Color", "Delay offset" },
+            { "FXSPREAD", "Spread", "Feedback / stereo spread" },
+            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+        };
+
+    if (name.contains ("phaser"))
+        return {
+            { "FXMIX", "Mix", "Dry / wet blend" },
+            { "FXRATE", "Rate", "Sweep speed" },
+            { "FXINTENSITY", "Depth", "Notch depth" },
+            { "FXCOLOUR", "Color", "Centre frequency" },
+            { "FXSPREAD", "Spread", "Stereo offset" },
+            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+        };
+
+    if (name.contains ("overdrive"))
+        return {
+            { "DRIVE", "Drive", "Input saturation" },
+            { "TONE", "Tone", "Post-drive brightness" },
+            { "FXMIX", "Mix", "Parallel blend" },
+            { "INPUTGAIN", "Input", "Pre-drive gain" },
+            { "OUTPUTGAIN", "Output", "Post-drive trim" },
+        };
+
+    if (name.contains ("distortion"))
+        return {
+            { "DRIVE", "Drive", "Input saturation" },
+            { "TONE", "Tone", "Post-drive brightness" },
+            { "FXSPREAD", "Bias", "Asymmetry / edge" },
+            { "FXMIX", "Mix", "Parallel blend" },
+            { "INPUTGAIN", "Input", "Pre-drive gain" },
+            { "OUTPUTGAIN", "Output", "Post-drive trim" },
+        };
+
+    if (name.contains ("compress"))
+        return {
+            { "THRESHOLD", "Threshold", "Compression threshold" },
+            { "RATIO", "Ratio", "Compression ratio" },
+            { "COMPATTACK", "Attack", "Attack time (ms)" },
+            { "COMPRELEASE", "Release", "Release time (ms)" },
+            { "MAKEUPGAIN", "Makeup", "Gain after compression" },
+            { "FXMIX", "Mix", "Parallel blend" },
+        };
+
+    if (name.contains ("amp emulator"))
+        return {
+            { "DRIVE", "Drive", "Preamp saturation" },
+            { "TONE", "Tone", "Cab / tone stack brightness" },
+            { "PRESENCE", "Presence", "Upper-mid bite" },
+            { "FXMIX", "Mix", "Dry / amped blend" },
+            { "INPUTGAIN", "Input", "Preamp gain" },
+            { "OUTPUTGAIN", "Output", "Post-amp trim" },
+        };
+
+    if (name.contains ("bit crusher"))
+        return {
+            { "BITDEPTH", "Bits", "Quantisation depth" },
+            { "SAMPLEREDUCE", "Rate", "Sample hold amount" },
+            { "FXMIX", "Mix", "Dry / wet blend" },
+            { "INPUTGAIN", "Input", "Pre-crush gain" },
+            { "OUTPUTGAIN", "Output", "Post-crush trim" },
+        };
+
+    if (name.contains ("rhythm gate"))
+        return {
+            { "RHYTHMGATE_RATE", "Rate", "Gate speed" },
+            { "RHYTHMGATE_DEPTH", "Depth", "Gate amount" },
+            { "GATEFLOOR", "Floor", "Minimum open level" },
+            { "FXMIX", "Mix", "Dry / wet blend" },
+            { "FXSPREAD", "Stereo", "Channel offset" },
+            { "OUTPUTGAIN", "Output", "Post-gate trim" },
+        };
 
     if (isTributeVirus())
         return {
@@ -4548,33 +4797,6 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "AMPRELEASE", "Release", "Tail and sustain feel" },
         };
 
-    if (isStringSynthPluginName (name))
-        return {
-            { "POLYPHONY", "Poly", "Max active notes" },
-            { "UNISON", "Unison", "Voices per note" },
-            { "DETUNE", "Detune", "Unison spread" },
-            { "CUTOFF", "Cutoff", "Brightness and air" },
-            { "RESONANCE", "Res", "Filter focus" },
-            { "FILTERENVAMOUNT", "Env Amt", "Filter bloom depth" },
-            { "FILTATTACK", "Flt Att", "Filter rise" },
-            { "FILTDECAY", "Flt Dec", "Filter fall" },
-            { "FILTSUSTAIN", "Flt Sus", "Filter hold" },
-            { "FILTRELEASE", "Flt Rel", "Filter tail" },
-            { "AMPATTACK", "Amp Att", "Level rise" },
-            { "AMPDECAY", "Amp Dec", "Level fall" },
-            { "AMPSUSTAIN", "Amp Sus", "Level hold" },
-            { "AMPRELEASE", "Amp Rel", "Level tail" },
-            { "FXMIX", "FX Mix", "Insert blend" },
-            { "FXINTENSITY", "FX Int", "Insert depth" },
-            { "FXRATE", "FX Rate", "Movement speed" },
-            { "FXCOLOUR", "FX Color", "Tone / color" },
-            { "FXSPREAD", "FX Spread", "Width / feedback" },
-            { "DELAYSEND", "Delay", "Echo send" },
-            { "DELAYTIME", "Dly Time", "Echo space" },
-            { "DELAYFEEDBACK", "Feedback", "Echo repeats" },
-            { "REVERBMIX", "Reverb", "Room blend" },
-        };
-
     if (name.contains ("pad"))
         return {
             { "CUTOFF", "Cutoff", "Brightness and air" },
@@ -4739,6 +4961,9 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
 
         g.setColour (theme.accent.withAlpha (0.6f));
         g.fillRoundedRectangle (juce::Rectangle<float> (24.0f, 108.0f, static_cast<float> (getWidth()) - 48.0f, 2.5f), 1.25f);
+
+        if (audioProcessor.isNativeFxFlavor())
+            paintNativeFxVisualizer (g);
 
         if (isTribute909())
         {
@@ -5561,6 +5786,8 @@ void AdvancedVSTiAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
 
 void AdvancedVSTiAudioProcessorEditor::resized()
 {
+    nativeFxVisualizerBounds = {};
+
     if (isTribute303())
     {
         const auto uiScale = juce::jlimit (0.75f, 1.6f, juce::jmin (getWidth() / 1020.0f, getHeight() / 430.0f));
@@ -6028,13 +6255,16 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         }
 
         const bool drumFixedLayout = isTribute909();
+        const bool nativeFxLayout = audioProcessor.isNativeFxFlavor();
+        const int heroHeight = nativeFxLayout ? kFixedInstrumentFxHeroHeight : kFixedInstrumentHeroHeight;
+        const int heroGap = nativeFxLayout ? kFixedInstrumentFxHeroGap : kFixedInstrumentHeroGap;
         auto layoutBounds = getLocalBounds();
         juce::Rectangle<int> standaloneKeyboardArea;
         if (usesStandalonePreviewKeyboard() && standaloneKeyboardVisible)
             standaloneKeyboardArea = layoutBounds.removeFromBottom (kStandaloneKeyboardExtraHeight);
 
         auto area = layoutBounds.reduced (kFixedInstrumentOuterPadding);
-        auto hero = area.removeFromTop (drumFixedLayout ? kFixedDrumHeroHeight : kFixedInstrumentHeroHeight);
+        auto hero = area.removeFromTop (drumFixedLayout ? kFixedDrumHeroHeight : heroHeight);
         if (standaloneKeyboardToggle != nullptr && usesStandalonePreviewKeyboard())
         {
             const auto buttonSize = 28;
@@ -6046,14 +6276,14 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             standaloneKeyboardToggle->setBounds ({});
         }
 
-        badgeLabel.setFont (juce::Font (drumFixedLayout ? 11.0f : 12.0f, juce::Font::bold));
-        titleLabel.setFont (juce::Font (drumFixedLayout ? 24.0f : 28.0f, juce::Font::bold));
-        subtitleLabel.setFont (juce::Font (drumFixedLayout ? 12.0f : 13.0f, juce::Font::plain));
+        badgeLabel.setFont (juce::Font (drumFixedLayout ? 11.0f : (nativeFxLayout ? 11.0f : 12.0f), juce::Font::bold));
+        titleLabel.setFont (juce::Font (drumFixedLayout ? 24.0f : (nativeFxLayout ? 22.0f : 28.0f), juce::Font::bold));
+        subtitleLabel.setFont (juce::Font (drumFixedLayout ? 12.0f : (nativeFxLayout ? 12.0f : 13.0f), juce::Font::plain));
         auto heroText = hero.withTrimmedRight (isTribute909() ? 0 : 252);
         badgeLabel.setBounds (heroText.removeFromTop (18));
-        titleLabel.setBounds (heroText.removeFromTop (drumFixedLayout ? 30 : 34));
-        subtitleLabel.setBounds (heroText.removeFromTop (drumFixedLayout ? 22 : 28));
-        area.removeFromTop (drumFixedLayout ? kFixedDrumHeroGap : kFixedInstrumentHeroGap);
+        titleLabel.setBounds (heroText.removeFromTop (drumFixedLayout ? 30 : (nativeFxLayout ? 28 : 34)));
+        subtitleLabel.setBounds (heroText.removeFromTop (drumFixedLayout ? 22 : (nativeFxLayout ? 24 : 28)));
+        area.removeFromTop (drumFixedLayout ? kFixedDrumHeroGap : heroGap);
 
         if (! choiceCards.isEmpty())
         {
@@ -6072,6 +6302,12 @@ void AdvancedVSTiAudioProcessorEditor::resized()
                 x += choiceWidth + choiceGap;
             }
             area.removeFromTop (choiceHeight + choiceBottomGap);
+        }
+
+        if (nativeFxLayout)
+        {
+            nativeFxVisualizerBounds = area.removeFromTop (kFixedInstrumentFxVisualizerHeight);
+            area.removeFromTop (kFixedInstrumentFxVisualizerGap);
         }
 
         if (isTribute909())
@@ -6146,7 +6382,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             return;
         }
 
-        const int knobColumns = fixedInstrumentKnobColumns (knobCards.size());
+        const int knobColumns = fixedInstrumentKnobColumns (knobCards.size(), audioProcessor.isNativeFxFlavor());
         const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);
         int knobIndex = 0;
         int rowY = area.getY();

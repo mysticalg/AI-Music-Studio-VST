@@ -41,15 +41,16 @@ public:
     void releaseResources() override;
     void reset() override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    [[nodiscard]] bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
     [[nodiscard]] juce::AudioProcessorEditor* createEditor() override;
     [[nodiscard]] bool hasEditor() const override { return true; }
 
     [[nodiscard]] const juce::String getName() const override { return JucePlugin_Name; }
-    [[nodiscard]] bool acceptsMidi() const override { return true; }
+    [[nodiscard]] bool acceptsMidi() const override;
     [[nodiscard]] bool producesMidi() const override { return false; }
     [[nodiscard]] bool isMidiEffect() const override { return false; }
-    [[nodiscard]] double getTailLengthSeconds() const override { return 0.0; }
+    [[nodiscard]] double getTailLengthSeconds() const override;
 
     int getNumPrograms() override;
     int getCurrentProgram() override;
@@ -76,6 +77,7 @@ public:
     void panicAllNotes();
     void auditionPresetNote (int midiNote = 60, float velocity = 0.9f, int durationMs = 420);
     [[nodiscard]] VirusPresetMetadata getVirusPresetMetadata (int presetIndex) const;
+    [[nodiscard]] bool isNativeFxFlavor() const noexcept;
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -85,13 +87,10 @@ private:
         advanced = 0,
         drumMachine,
         bassSynth,
-        stringSynth,
         leadSynth,
         padSynth,
         pluckSynth,
         sampler,
-        drum808,
-        acid303,
         vec1DrumPad,
         piano,
         stringEnsemble,
@@ -99,7 +98,18 @@ private:
         flute,
         saxophone,
         bassGuitar,
-        organ
+        organ,
+        delayFx = 100,
+        reverbFx,
+        chorusFx,
+        flangerFx,
+        phaserFx,
+        overdriveFx,
+        distortionFx,
+        compressorFx,
+        ampEmulatorFx,
+        bitCrusherFx,
+        rhythmGateFx
     };
 
     static constexpr int drumVoiceLevelCount = 15;
@@ -345,9 +355,32 @@ private:
         float fxRate = 0.65f;
         float fxColour = 0.5f;
         float fxSpread = 0.4f;
+        float inputGainDb = 0.0f;
+        float outputGainDb = 0.0f;
+        float drive = 0.4f;
+        float tone = 0.5f;
+        float presence = 0.5f;
+        float thresholdDb = -18.0f;
+        float ratio = 4.0f;
+        float compressorAttackMs = 15.0f;
+        float compressorReleaseMs = 120.0f;
+        float makeupGainDb = 0.0f;
+        int bitDepth = 8;
+        int sampleReduce = 4;
+        int ampModel = 0;
+        float gateFloor = 0.0f;
+        bool timingSyncEnabled = false;
+        int timingDivisionIndex = 11;
         float delaySend = 0.0f;
         float delayTimeSec = 0.32f;
+        float delayTimeRightSec = 0.32f;
         float delayFeedback = 0.25f;
+        float delayFeedbackRight = 0.25f;
+        int delayRightDivisionIndex = 11;
+        int delayFilterLeftMode = 1;
+        int delayFilterRightMode = 1;
+        float delayFilterCutoffLeft = 8500.0f;
+        float delayFilterCutoffRight = 8500.0f;
         float reverbMix = 0.0f;
         float reverbTime = 0.45f;
         float reverbDamping = 0.45f;
@@ -487,11 +520,28 @@ private:
     juce::dsp::IIR::Filter<float> highEqLeft;
     juce::dsp::IIR::Filter<float> highEqRight;
     juce::Reverb reverb;
+    juce::dsp::Compressor<float> compressorLeft;
+    juce::dsp::Compressor<float> compressorRight;
     juce::AudioBuffer<float> delayBuffer;
     juce::AudioBuffer<float> wetScratchBuffer;
     int delayWritePosition = 0;
     float currentFilterEnvPeak = 0.0f;
     EqSettingsSnapshot cachedEqSettings;
+    float delayFeedbackStateLeft = 0.0f;
+    float delayFeedbackStateRight = 0.0f;
+    float driveToneStateLeft = 0.0f;
+    float driveToneStateRight = 0.0f;
+    float ampHighpassStateLeft = 0.0f;
+    float ampHighpassStateRight = 0.0f;
+    float ampToneStateLeft = 0.0f;
+    float ampToneStateRight = 0.0f;
+    float ampPresenceStateLeft = 0.0f;
+    float ampPresenceStateRight = 0.0f;
+    float ampCabStateLeft = 0.0f;
+    float ampCabStateRight = 0.0f;
+    float bitCrusherHeldLeft = 0.0f;
+    float bitCrusherHeldRight = 0.0f;
+    int bitCrusherCounter = 0;
 
     float lfo1Phase = 0.0f;
     float lfo2Phase = 0.0f;
@@ -527,8 +577,6 @@ private:
         return InstrumentFlavor::drumMachine;
 #elif AIMS_INSTRUMENT_FLAVOR == 2
         return InstrumentFlavor::bassSynth;
-#elif AIMS_INSTRUMENT_FLAVOR == 3
-        return InstrumentFlavor::stringSynth;
 #elif AIMS_INSTRUMENT_FLAVOR == 4
         return InstrumentFlavor::leadSynth;
 #elif AIMS_INSTRUMENT_FLAVOR == 5
@@ -537,10 +585,6 @@ private:
         return InstrumentFlavor::pluckSynth;
 #elif AIMS_INSTRUMENT_FLAVOR == 7
         return InstrumentFlavor::sampler;
-#elif AIMS_INSTRUMENT_FLAVOR == 8
-        return InstrumentFlavor::drum808;
-#elif AIMS_INSTRUMENT_FLAVOR == 9
-        return InstrumentFlavor::acid303;
 #elif AIMS_INSTRUMENT_FLAVOR == 10
         return InstrumentFlavor::vec1DrumPad;
 #elif AIMS_INSTRUMENT_FLAVOR == 11
@@ -557,21 +601,57 @@ private:
         return InstrumentFlavor::bassGuitar;
 #elif AIMS_INSTRUMENT_FLAVOR == 17
         return InstrumentFlavor::organ;
+#elif AIMS_INSTRUMENT_FLAVOR == 100
+        return InstrumentFlavor::delayFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 101
+        return InstrumentFlavor::reverbFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 102
+        return InstrumentFlavor::chorusFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 103
+        return InstrumentFlavor::flangerFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 104
+        return InstrumentFlavor::phaserFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 105
+        return InstrumentFlavor::overdriveFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 106
+        return InstrumentFlavor::distortionFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 107
+        return InstrumentFlavor::compressorFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 108
+        return InstrumentFlavor::ampEmulatorFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 109
+        return InstrumentFlavor::bitCrusherFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 110
+        return InstrumentFlavor::rhythmGateFx;
 #else
         return InstrumentFlavor::advanced;
 #endif
     }
 
+    [[nodiscard]] static constexpr bool isEffectFlavor() noexcept
+    {
+        return buildFlavor() == InstrumentFlavor::delayFx
+               || buildFlavor() == InstrumentFlavor::reverbFx
+               || buildFlavor() == InstrumentFlavor::chorusFx
+               || buildFlavor() == InstrumentFlavor::flangerFx
+               || buildFlavor() == InstrumentFlavor::phaserFx
+               || buildFlavor() == InstrumentFlavor::overdriveFx
+               || buildFlavor() == InstrumentFlavor::distortionFx
+               || buildFlavor() == InstrumentFlavor::compressorFx
+               || buildFlavor() == InstrumentFlavor::ampEmulatorFx
+               || buildFlavor() == InstrumentFlavor::bitCrusherFx
+               || buildFlavor() == InstrumentFlavor::rhythmGateFx;
+    }
+
     [[nodiscard]] static constexpr bool isDrumFlavor() noexcept
     {
         return buildFlavor() == InstrumentFlavor::drumMachine
-               || buildFlavor() == InstrumentFlavor::drum808
                || buildFlavor() == InstrumentFlavor::vec1DrumPad;
     }
 
     [[nodiscard]] static constexpr bool isSynthDrumFlavor() noexcept
     {
-        return buildFlavor() == InstrumentFlavor::drumMachine || buildFlavor() == InstrumentFlavor::drum808;
+        return buildFlavor() == InstrumentFlavor::drumMachine;
     }
 
     [[nodiscard]] static constexpr bool isAcousticFlavor() noexcept
@@ -602,12 +682,10 @@ private:
     {
         if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
             return 1;
-        else if constexpr (buildFlavor() == InstrumentFlavor::drumMachine || buildFlavor() == InstrumentFlavor::drum808)
+        else if constexpr (buildFlavor() == InstrumentFlavor::drumMachine)
             return 8;
         else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
             return 24;
-        else if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
-            return maxVoices;
         else if constexpr (buildFlavor() == InstrumentFlavor::leadSynth)
             return 8;
         else if constexpr (buildFlavor() == InstrumentFlavor::padSynth)
@@ -616,8 +694,6 @@ private:
             return 6;
         else if constexpr (buildFlavor() == InstrumentFlavor::sampler)
             return 6;
-        else if constexpr (buildFlavor() == InstrumentFlavor::acid303)
-            return 1;
         else if constexpr (buildFlavor() == InstrumentFlavor::piano)
             return 16;
         else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
@@ -642,18 +718,14 @@ private:
     {
         if constexpr (buildFlavor() == InstrumentFlavor::bassSynth
                       || buildFlavor() == InstrumentFlavor::drumMachine
-                      || buildFlavor() == InstrumentFlavor::drum808
                       || buildFlavor() == InstrumentFlavor::vec1DrumPad
                       || buildFlavor() == InstrumentFlavor::sampler
                       || buildFlavor() == InstrumentFlavor::pluckSynth
                       || buildFlavor() == InstrumentFlavor::piano
                       || buildFlavor() == InstrumentFlavor::flute
                       || buildFlavor() == InstrumentFlavor::saxophone
-                      || buildFlavor() == InstrumentFlavor::bassGuitar
-                      || buildFlavor() == InstrumentFlavor::acid303)
+                      || buildFlavor() == InstrumentFlavor::bassGuitar)
             return 1;
-        else if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
-            return maxUnisonOscillators;
         else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
             return 2;
         else if constexpr (buildFlavor() == InstrumentFlavor::violin)
@@ -700,6 +772,7 @@ private:
     void applyAdvancedEffects (juce::AudioBuffer<float>& buffer);
     void ensureWetScratchBufferSize (int numChannels, int numSamples);
     void refreshEqFiltersIfNeeded();
+    void processNativeEffectBlock (juce::AudioBuffer<float>& buffer);
 
     void updateRenderParameters();
     void applyEnvelopeSettings();

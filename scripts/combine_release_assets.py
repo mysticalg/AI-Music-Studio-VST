@@ -34,10 +34,30 @@ def discover_platform_name(path: Path) -> str:
     return name
 
 
-def build_release_archives(platform_dirs: list[Path], output_dir: Path) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
+def prune_stale_archives(output_dir: Path, valid_names: set[str]) -> None:
+    if not output_dir.exists():
+        return
 
-    for instrument in load_catalog():
+    for child in output_dir.iterdir():
+        if not child.is_file():
+            continue
+        if child.name in valid_names:
+            continue
+        child.unlink()
+
+
+def build_release_archives(platform_dirs: list[Path], output_dir: Path) -> None:
+    catalog = load_catalog()
+    valid_archive_names = {
+        asset_name
+        for instrument in catalog
+        for asset_name in instrument["releaseAssets"].values()
+    }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prune_stale_archives(output_dir, valid_archive_names)
+
+    for instrument in catalog:
         slug = instrument["slug"]
         for package_format, asset_name in instrument["releaseAssets"].items():
             package_sources: list[tuple[str, Path]] = []

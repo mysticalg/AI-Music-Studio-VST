@@ -21,6 +21,10 @@
 #define AIMS_OPEN_INSTRUMENT_SAMPLES_PATH ""
 #endif
 
+#ifndef AIMS_VEC1_LIBRARY_PATH
+#define AIMS_VEC1_LIBRARY_PATH ""
+#endif
+
 namespace
 {
 constexpr float twoPi = juce::MathConstants<float>::twoPi;
@@ -66,12 +70,6 @@ constexpr std::array<float, 15> drumMachineVoiceLevelDefaults {
     1.0f, 0.96f, 0.72f, 0.9f, 0.84f,
     0.88f, 0.84f, 0.82f, 0.8f, 0.78f,
     0.76f, 0.68f, 0.66f, 0.62f, 0.72f
-};
-
-constexpr std::array<float, 15> drum808VoiceLevelDefaults {
-    1.08f, 0.94f, 0.7f, 0.8f, 0.72f,
-    0.8f, 0.88f, 0.84f, 0.8f, 0.72f,
-    0.74f, 0.68f, 0.64f, 0.66f, 0.72f
 };
 
 constexpr int vecPadMidiStart = 36;
@@ -275,6 +273,62 @@ juce::StringArray virusArpPatternChoices()
 juce::StringArray virusArpModeChoices()
 {
     return { "Up", "Down", "UpDown", "Random", "As Played", "Chord" };
+}
+
+struct NativeFxTimingDivision
+{
+    const char* label;
+    double quarterNotes = 1.0;
+};
+
+constexpr std::array<NativeFxTimingDivision, 19> kNativeFxTimingDivisions {{
+    { "2/1",   8.0 },
+    { "1/1D",  6.0 },
+    { "1/1",   4.0 },
+    { "1/1T",  8.0 / 3.0 },
+    { "1/2D",  3.0 },
+    { "1/2",   2.0 },
+    { "1/2T",  4.0 / 3.0 },
+    { "1/4D",  1.5 },
+    { "1/4",   1.0 },
+    { "1/4T",  2.0 / 3.0 },
+    { "1/8D",  0.75 },
+    { "1/8",   0.5 },
+    { "1/8T",  1.0 / 3.0 },
+    { "1/16D", 0.375 },
+    { "1/16",  0.25 },
+    { "1/16T", 1.0 / 6.0 },
+    { "1/32D", 0.1875 },
+    { "1/32",  0.125 },
+    { "1/32T", 1.0 / 12.0 }
+}};
+
+juce::StringArray nativeFxTimingDivisionChoices()
+{
+    juce::StringArray choices;
+    for (const auto& division : kNativeFxTimingDivisions)
+        choices.add (division.label);
+    return choices;
+}
+
+juce::StringArray delayDecayFilterChoices()
+{
+    return { "Off", "LP", "HP" };
+}
+
+double nativeFxTimingSecondsFromBpm (double bpm, int divisionIndex)
+{
+    const auto safeBpm = juce::jlimit (20.0, 320.0, bpm > 1.0 ? bpm : 120.0);
+    const auto clampedIndex = juce::jlimit (0, static_cast<int> (kNativeFxTimingDivisions.size()) - 1, divisionIndex);
+    const auto quarterNoteSeconds = 60.0 / safeBpm;
+    return quarterNoteSeconds * kNativeFxTimingDivisions[static_cast<size_t> (clampedIndex)].quarterNotes;
+}
+
+float reverbRoomSizeFromSeconds (double decaySeconds)
+{
+    const auto clampedSeconds = juce::jlimit (0.08, 8.0, decaySeconds);
+    const auto normalized = std::log (clampedSeconds / 0.08) / std::log (8.0 / 0.08);
+    return juce::jlimit (0.05f, 1.0f, static_cast<float> (0.08 + normalized * 0.92));
 }
 
 struct ImportedVirusPresetData
@@ -702,9 +756,56 @@ constexpr WavetableFrameSet kVirusVocalFrames { {
 } };
 
 juce::File bundledInstrumentResourceRoot (const juce::String& folderName);
+juce::File repoLinkedCacheRoot (const juce::String& folderName);
 juce::String regionAttributeValue (const juce::String& line, const juce::String& key);
 int regionAttributeInt (const juce::String& line, const juce::String& key, int defaultValue);
 float regionAttributeFloat (const juce::String& line, const juce::String& key, float defaultValue);
+
+juce::File configuredLibraryRoot (const juce::String& configuredPath)
+{
+    if (configuredPath.trim().isEmpty())
+        return {};
+
+    const auto configuredRoot = juce::File::createFileWithoutCheckingPath (configuredPath);
+    if (configuredRoot.isDirectory())
+        return configuredRoot;
+
+    return {};
+}
+
+juce::File runtimeLibraryOverride (const juce::String& environmentVariableName)
+{
+    return configuredLibraryRoot (juce::SystemStats::getEnvironmentVariable (environmentVariableName, {}));
+}
+
+juce::File installedSharedLibraryRoot (const juce::String& folderName)
+{
+    const auto configuredSharedRoot = runtimeLibraryOverride ("AI_MUSIC_STUDIO_VST_DATA_ROOT");
+    if (configuredSharedRoot.isDirectory())
+    {
+        const auto configuredFolder = configuredSharedRoot.getChildFile (folderName);
+        if (configuredFolder.isDirectory())
+            return configuredFolder;
+    }
+
+    const auto commonDataDirectory = juce::File::getSpecialLocation (juce::File::commonApplicationDataDirectory);
+    if (! commonDataDirectory.isDirectory())
+        return {};
+
+    constexpr std::array<const char*, 2> baseSubpaths {
+        "AI Music Studio/VSTData",
+        "AI Music Studio"
+    };
+
+    for (const auto* baseSubpath : baseSubpaths)
+    {
+        const auto candidate = commonDataDirectory.getChildFile (juce::String (baseSubpath)).getChildFile (folderName);
+        if (candidate.isDirectory())
+            return candidate;
+    }
+
+    return {};
+}
 
 const WavetableFrameSet& virusWavetableFramesForVariant (int variant)
 {
@@ -757,7 +858,19 @@ juce::File vecPadLibraryRoot()
     if (bundledRoot.isDirectory())
         return bundledRoot;
 
-    return juce::File::createFileWithoutCheckingPath (R"(D:\OneDrive\Music\Sound Design\Sample Library\sample library\VEC1)");
+    const auto runtimeRoot = runtimeLibraryOverride ("AI_MUSIC_STUDIO_VEC1_LIBRARY");
+    if (runtimeRoot.isDirectory())
+        return runtimeRoot;
+
+    const auto configuredRoot = configuredLibraryRoot (juce::String (AIMS_VEC1_LIBRARY_PATH));
+    if (configuredRoot.isDirectory())
+        return configuredRoot;
+
+    const auto installedRoot = installedSharedLibraryRoot ("VEC1");
+    if (installedRoot.isDirectory())
+        return installedRoot;
+
+    return repoLinkedCacheRoot ("VEC1");
 }
 
 juce::File repoLinkedCacheRoot (const juce::String& folderName)
@@ -803,27 +916,23 @@ juce::File repoLinkedCacheRoot (const juce::String& folderName)
     return {};
 }
 
-juce::File configuredLibraryRoot (const juce::String& configuredPath)
-{
-    if (configuredPath.trim().isEmpty())
-        return {};
-
-    const auto configuredRoot = juce::File::createFileWithoutCheckingPath (configuredPath);
-    if (configuredRoot.isDirectory())
-        return configuredRoot;
-
-    return {};
-}
-
 juce::File pianoLibraryRoot()
 {
     const auto bundledRoot = bundledInstrumentResourceRoot ("Piano");
     if (bundledRoot.isDirectory())
         return bundledRoot;
 
+    const auto runtimeRoot = runtimeLibraryOverride ("AI_MUSIC_STUDIO_PIANO_LIBRARY");
+    if (runtimeRoot.isDirectory())
+        return runtimeRoot;
+
     const auto configuredRoot = configuredLibraryRoot (juce::String (AIMS_PIANO_LIBRARY_PATH));
     if (configuredRoot.isDirectory())
         return configuredRoot;
+
+    const auto installedRoot = installedSharedLibraryRoot ("SplendidGrandPiano");
+    if (installedRoot.isDirectory())
+        return installedRoot;
 
     return repoLinkedCacheRoot ("SplendidGrandPiano");
 }
@@ -834,9 +943,17 @@ juce::File openInstrumentSamplesRoot()
     if (bundledRoot.isDirectory())
         return bundledRoot;
 
+    const auto runtimeRoot = runtimeLibraryOverride ("AI_MUSIC_STUDIO_OPEN_INSTRUMENT_SAMPLES");
+    if (runtimeRoot.isDirectory())
+        return runtimeRoot;
+
     const auto configuredRoot = configuredLibraryRoot (juce::String (AIMS_OPEN_INSTRUMENT_SAMPLES_PATH));
     if (configuredRoot.isDirectory())
         return configuredRoot;
+
+    const auto installedRoot = installedSharedLibraryRoot ("OpenInstrumentSamples");
+    if (installedRoot.isDirectory())
+        return installedRoot;
 
     return repoLinkedCacheRoot ("OpenInstrumentSamples");
 }
@@ -1167,6 +1284,56 @@ float softSaturate (float value)
     return std::tanh (value);
 }
 
+float saturateWithMode (float value, int saturationType, float drive)
+{
+    const auto driven = value * drive;
+
+    switch (juce::jlimit (0, 3, saturationType))
+    {
+        case 1:
+            return std::tanh (driven * 0.92f) * 0.94f;
+        case 2:
+            return std::atan (driven * 1.35f) * 0.78f;
+        case 3:
+        {
+            const auto folded = std::abs (std::fmod (driven + 1.0f, 4.0f) - 2.0f) - 1.0f;
+            return softSaturate (folded * 1.05f) * 0.9f;
+        }
+        default:
+            return softSaturate (driven) * 0.94f;
+    }
+}
+
+float onePoleLowPass (float input, float cutoffHz, double sampleRate, float& state)
+{
+    const auto coeff = juce::jlimit (0.0f,
+                                     1.0f,
+                                     1.0f - std::exp (-juce::MathConstants<float>::twoPi
+                                                      * juce::jlimit (20.0f, 20000.0f, cutoffHz)
+                                                      / static_cast<float> (juce::jmax (1.0, sampleRate))));
+    state += coeff * (input - state);
+    return state;
+}
+
+float onePoleHighPass (float input, float cutoffHz, double sampleRate, float& state)
+{
+    return input - onePoleLowPass (input, cutoffHz, sampleRate, state);
+}
+
+float processDelayDecayFilter (float input, int filterMode, float cutoffHz, double sampleRate, float& state)
+{
+    switch (juce::jlimit (0, 2, filterMode))
+    {
+        case 1:
+            return onePoleLowPass (input, cutoffHz, sampleRate, state);
+        case 2:
+            return onePoleHighPass (input, cutoffHz, sampleRate, state);
+        default:
+            state = input;
+            return input;
+    }
+}
+
 float smoothTowards (float target, float coeff, float& state)
 {
     state += coeff * (target - state);
@@ -1351,16 +1518,8 @@ constexpr std::array<float, 7> drumMachineVoiceTuneDefaults {
     0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
 };
 
-constexpr std::array<float, 7> drum808VoiceTuneDefaults {
-    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
-};
-
 constexpr std::array<float, 6> drumMachineVoiceDecayDefaults {
     0.52f, 0.5f, 0.5f, 0.48f, 0.32f, 0.58f
-};
-
-constexpr std::array<float, 6> drum808VoiceDecayDefaults {
-    0.72f, 0.62f, 0.58f, 0.54f, 0.28f, 0.74f
 };
 
 bool migrateLegacyDrumFilterChoice (juce::ValueTree state)
@@ -1528,7 +1687,11 @@ struct AdvancedVSTiAudioProcessor::AcousticSampleLibrary
 };
 
 AdvancedVSTiAudioProcessor::AdvancedVSTiAudioProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (isEffectFlavor()
+                          ? BusesProperties()
+                                .withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                                .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                          : BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
     loadedSample.setSize (1, 1);
@@ -1542,6 +1705,15 @@ AdvancedVSTiAudioProcessor::AdvancedVSTiAudioProcessor()
             apvts.addParameterListener (externalPadSampleParameterIdForIndex (padIndex), this);
     }
     currentProgramIndex = juce::jlimit (0, juce::jmax (0, presetChoicesForFlavor().size() - 1), paramIndex (apvts, "PRESET"));
+
+    if constexpr (buildFlavor() == InstrumentFlavor::piano)
+    {
+        initializePianoSampleLibrary();
+    }
+    else if constexpr (isAcousticFlavor())
+    {
+        initializeAcousticSampleLibrary (paramIndex (apvts, "SAMPLEBANK"));
+    }
 }
 
 AdvancedVSTiAudioProcessor::~AdvancedVSTiAudioProcessor()
@@ -1553,6 +1725,36 @@ AdvancedVSTiAudioProcessor::~AdvancedVSTiAudioProcessor()
             apvts.removeParameterListener (externalPadSampleParameterIdForIndex (padIndex), this);
     }
     apvts.removeParameterListener ("PRESET", this);
+}
+
+bool AdvancedVSTiAudioProcessor::acceptsMidi() const
+{
+    return ! isEffectFlavor();
+}
+
+double AdvancedVSTiAudioProcessor::getTailLengthSeconds() const
+{
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx || buildFlavor() == InstrumentFlavor::reverbFx)
+        return 8.0;
+
+    return isEffectFlavor() ? 1.0 : 0.0;
+}
+
+bool AdvancedVSTiAudioProcessor::isNativeFxFlavor() const noexcept
+{
+    return isEffectFlavor();
+}
+
+bool AdvancedVSTiAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    const auto mainOutput = layouts.getMainOutputChannelSet();
+    if (mainOutput != juce::AudioChannelSet::stereo())
+        return false;
+
+    if constexpr (isEffectFlavor())
+        return layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo();
+
+    return layouts.getMainInputChannelSet().isDisabled();
 }
 
 void AdvancedVSTiAudioProcessor::previewDrumPad (int midiNote, float velocity)
@@ -1729,7 +1931,11 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     highEqLeft.reset();
     highEqRight.reset();
     reverb.reset();
-    delayBuffer.setSize (2, juce::jmax (samplesPerBlock * 4, static_cast<int> (sampleRate * 3.0)));
+    compressorLeft.prepare (spec);
+    compressorRight.prepare (spec);
+    compressorLeft.reset();
+    compressorRight.reset();
+    delayBuffer.setSize (2, juce::jmax (samplesPerBlock * 4, static_cast<int> (sampleRate * 32.0)));
     delayBuffer.clear();
     wetScratchBuffer.setSize (2, juce::jmax (1, samplesPerBlock), false, false, true);
     wetScratchBuffer.clear();
@@ -1744,8 +1950,11 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     }
 
     updateRenderParameters();
-    refreshSampleBank();
-    refreshExternalPadSamples();
+    if constexpr (! isEffectFlavor())
+    {
+        refreshSampleBank();
+        refreshExternalPadSamples();
+    }
     applyEnvelopeSettings();
     reset();
 }
@@ -1792,9 +2001,26 @@ void AdvancedVSTiAudioProcessor::reset()
     highEqLeft.reset();
     highEqRight.reset();
     reverb.reset();
+    compressorLeft.reset();
+    compressorRight.reset();
     delayBuffer.clear();
     delayWritePosition = 0;
     currentFilterEnvPeak = 0.0f;
+    delayFeedbackStateLeft = 0.0f;
+    delayFeedbackStateRight = 0.0f;
+    driveToneStateLeft = 0.0f;
+    driveToneStateRight = 0.0f;
+    ampHighpassStateLeft = 0.0f;
+    ampHighpassStateRight = 0.0f;
+    ampToneStateLeft = 0.0f;
+    ampToneStateRight = 0.0f;
+    ampPresenceStateLeft = 0.0f;
+    ampPresenceStateRight = 0.0f;
+    ampCabStateLeft = 0.0f;
+    ampCabStateRight = 0.0f;
+    bitCrusherHeldLeft = 0.0f;
+    bitCrusherHeldRight = 0.0f;
+    bitCrusherCounter = 0;
 
     for (auto& voice : voices)
     {
@@ -1849,20 +2075,10 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
 {
     if constexpr (buildFlavor() == InstrumentFlavor::drumMachine)
         return { "Classic 909", "Tight Club", "Dusty Machine" };
-    if constexpr (buildFlavor() == InstrumentFlavor::drum808)
-        return { "Classic 808", "Deep 808", "Sharp Electro" };
     if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
         return { "VEC1 Default" };
     if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
         return { "Sub Bass", "Saw Bass", "Square Bass", "Picked Bass" };
-    if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
-        return {
-            "Ensemble", "Soft Strings", "Synth Brass", "Warm Choir", "Cinema Swell", "Studio Section",
-            "Vintage Solina", "Octave Ribbon", "Silk Pad", "Muted Chamber", "Airy Tremolo", "Dark Legato",
-            "Glass Arcs", "Dream Cascade", "Wide Overture", "Rosin Lead", "Analog Sweep", "Halo Choir",
-            "Frozen Bow", "Pulse Ensemble", "Detuned Wash", "Ribbon Machine", "Golden Swell", "Velvet Brass",
-            "Aurora Choir", "Neon Strings", "Mono Cello", "Nordic Bloom", "Cathedral Pad", "Lush Motion"
-        };
     if constexpr (buildFlavor() == InstrumentFlavor::leadSynth)
         return { "Saw Lead", "Square Solo", "Soft Lead", "Brass Lead" };
     if constexpr (buildFlavor() == InstrumentFlavor::padSynth)
@@ -1871,8 +2087,6 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
         return { "Poly Pluck", "Bell Pluck", "Muted Pluck", "Glass Pluck" };
     if constexpr (buildFlavor() == InstrumentFlavor::sampler)
         return { "Dusty Keys", "Tape Choir", "Velvet Pluck", "Vox Chop", "Sub Stab", "Glass Bell" };
-    if constexpr (buildFlavor() == InstrumentFlavor::acid303)
-        return { "Acid Saw", "Acid Square", "Rounded 303", "Reso Line" };
     if constexpr (buildFlavor() == InstrumentFlavor::piano)
         return { "Concert Grand", "Felt Upright", "Pop Piano", "Cinematic Hall" };
     if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
@@ -1887,6 +2101,28 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
         return { "Finger Bass", "Pick Bass", "Muted Bass", "Round Bass" };
     if constexpr (buildFlavor() == InstrumentFlavor::organ)
         return { "Cathedral Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" };
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+        return { "Studio Delay" };
+    if constexpr (buildFlavor() == InstrumentFlavor::reverbFx)
+        return { "Wide Hall" };
+    if constexpr (buildFlavor() == InstrumentFlavor::chorusFx)
+        return { "Ensemble Chorus" };
+    if constexpr (buildFlavor() == InstrumentFlavor::flangerFx)
+        return { "Jet Flanger" };
+    if constexpr (buildFlavor() == InstrumentFlavor::phaserFx)
+        return { "Warm Phaser" };
+    if constexpr (buildFlavor() == InstrumentFlavor::overdriveFx)
+        return { "Warm Drive" };
+    if constexpr (buildFlavor() == InstrumentFlavor::distortionFx)
+        return { "Hard Clip" };
+    if constexpr (buildFlavor() == InstrumentFlavor::compressorFx)
+        return { "Glue Comp" };
+    if constexpr (buildFlavor() == InstrumentFlavor::ampEmulatorFx)
+        return { "Crunch Stack" };
+    if constexpr (buildFlavor() == InstrumentFlavor::bitCrusherFx)
+        return { "Lo-Fi Crush" };
+    if constexpr (buildFlavor() == InstrumentFlavor::rhythmGateFx)
+        return { "Pulse Gate" };
 
     auto names = builtInAdvancedVirusPresetChoices();
     for (const auto& imported : importedVirusPresets())
@@ -3312,8 +3548,7 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
 
 int AdvancedVSTiAudioProcessor::activeVoiceLimit() const noexcept
 {
-    if constexpr (buildFlavor() == InstrumentFlavor::stringSynth
-                  || buildFlavor() == InstrumentFlavor::stringEnsemble)
+    if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
         return juce::jlimit (1, voiceLimitForFlavor(), renderParams.polyphony);
 
     if constexpr (buildFlavor() == InstrumentFlavor::advanced)
@@ -3987,7 +4222,7 @@ float AdvancedVSTiAudioProcessor::renderDrumVoiceSample (VoiceState& voice)
     const auto snareTone = juce::jlimit (0.0f, 1.0f, renderParams.drumSnareTone);
     const auto snareSnappy = juce::jlimit (0.0f, 1.0f, renderParams.drumSnareSnappy);
     const auto decayMacro = std::sqrt (juce::jlimit (0.0f, 1.0f, renderParams.gateLength / 2.4f));
-    const auto decayScale = juce::jmap (decayMacro, 0.68f, buildFlavor() == InstrumentFlavor::drum808 ? 2.25f : 1.95f);
+    const auto decayScale = juce::jmap (decayMacro, 0.68f, 1.95f);
     const auto voiceDecayScale = 0.4f + renderParams.drumVoiceDecays[voiceIndex] * 1.2f;
     const auto brightness = normalizedLogValue (renderParams.cutoff, 120.0f, 20000.0f);
     const auto noiseMacro = juce::jlimit (0.0f, 1.0f, renderParams.filterEnvAmount);
@@ -4011,143 +4246,6 @@ float AdvancedVSTiAudioProcessor::renderDrumVoiceSample (VoiceState& voice)
         return phase < 0.5f ? 1.0f : -1.0f;
     };
 
-    if constexpr (buildFlavor() == InstrumentFlavor::drum808)
-    {
-        switch (kind)
-        {
-            case DrumVoiceKind::kick:
-            {
-                duration = 1.45f;
-                const auto pitch = scaledHz (34.0f + (82.0f + (punch * 26.0f)) * std::exp (-age * (7.5f + kickAttack * 5.0f)));
-                voice.auxPhase = std::fmod (voice.auxPhase + pitch * dt, 1.0f);
-                const auto body = std::sin (twoPi * voice.auxPhase) * std::exp (-age * (2.2f + ring * 0.6f));
-                const auto sub = std::sin (twoPi * std::fmod (voice.auxPhase * 0.5f, 1.0f)) * std::exp (-age * 1.8f);
-                const auto beater = noise * (0.03f + punch * 0.06f + kickAttack * 0.06f) * std::exp (-age * 95.0f);
-                output = (body * 0.92f) + (sub * 0.42f) + beater;
-                break;
-            }
-            case DrumVoiceKind::snare:
-            {
-                duration = 0.62f;
-                const auto toneScale = juce::jmap (snareTone, 0.84f, 1.28f);
-                const auto body = ((advanceSine (voice.phase, scaledHz (182.0f * toneScale)) * 0.6f)
-                                   + (advanceSine (voice.fmPhase, scaledHz (331.0f * toneScale)) * 0.38f)) * std::exp (-age * (8.4f - snareTone * 1.8f));
-                const auto rattle = noise * std::exp (-age * (14.0f - brightness * 2.0f - snareSnappy * 3.0f));
-                output = (body * juce::jmap (snareTone, 0.66f, 0.52f)) + (rattle * juce::jmap (snareSnappy, 0.62f, 0.96f));
-                break;
-            }
-            case DrumVoiceKind::rim:
-            {
-                duration = 0.12f;
-                const auto wood = (advanceSine (voice.phase, scaledHz (1710.0f)) * 0.54f) + (advanceSine (voice.fmPhase, scaledHz (2440.0f)) * 0.24f);
-                const auto click = noise * std::exp (-age * 78.0f);
-                output = (wood * std::exp (-age * 26.0f)) + (click * 0.12f);
-                break;
-            }
-            case DrumVoiceKind::clap:
-            {
-                duration = 0.5f;
-                const auto pulseA = std::exp (-std::pow ((age - 0.00f) * 38.0f, 2.0f));
-                const auto pulseB = std::exp (-std::pow ((age - 0.034f) * 34.0f, 2.0f));
-                const auto pulseC = std::exp (-std::pow ((age - 0.072f) * 30.0f, 2.0f));
-                const auto tail = std::exp (-age * 7.6f);
-                output = noise * ((0.82f * pulseA) + (0.78f * pulseB) + (0.66f * pulseC) + (0.4f * tail));
-                break;
-            }
-            case DrumVoiceKind::closedHat:
-            case DrumVoiceKind::openHat:
-            {
-                duration = kind == DrumVoiceKind::closedHat ? 0.16f : 0.72f;
-                const auto metallic =
-                    advanceSine (voice.phase, scaledHz (4180.0f))
-                    + advanceSine (voice.fmPhase, scaledHz (6450.0f))
-                    + advanceSine (voice.auxPhase, scaledHz (8630.0f))
-                    + advanceSine (voice.syncPhase, scaledHz (10940.0f));
-                const auto decayWeight = juce::jmap (voiceDecayScale, 1.18f, 0.74f);
-                const auto env = std::exp (-age * (kind == DrumVoiceKind::closedHat ? 34.0f : 10.5f) / decayWeight);
-                const auto airy = noise * std::exp (-age * (kind == DrumVoiceKind::closedHat ? 42.0f : 12.5f) / decayWeight);
-                output = (metallic * 0.13f + airy * 0.78f) * env;
-                break;
-            }
-            case DrumVoiceKind::lowTom:
-            case DrumVoiceKind::midTom:
-            case DrumVoiceKind::highTom:
-            {
-                const auto basePitch = kind == DrumVoiceKind::lowTom ? 98.0f
-                                       : kind == DrumVoiceKind::midTom ? 146.0f
-                                                                       : 198.0f;
-                duration = kind == DrumVoiceKind::lowTom ? 1.0f
-                           : kind == DrumVoiceKind::midTom ? 0.86f
-                                                           : 0.7f;
-                const auto pitch = scaledHz (juce::jlimit (72.0f, 250.0f, basePitch + (voice.midiNote - 45) * 1.6f));
-                const auto sweep = 1.0f + 0.42f * std::exp (-age * 5.4f);
-                const auto fundamental = advanceSine (voice.auxPhase, pitch * sweep);
-                const auto overtone = advanceSine (voice.syncPhase, (pitch * 1.49f) * (0.95f + std::exp (-age * 4.6f) * 0.1f));
-                output = (fundamental * 0.94f * std::exp (-age * 3.4f)) + (overtone * 0.18f * std::exp (-age * 4.1f));
-                break;
-            }
-            case DrumVoiceKind::crash:
-            {
-                duration = 1.28f;
-                const auto cluster =
-                    advanceSine (voice.phase, scaledHz (2890.0f))
-                    + advanceSine (voice.fmPhase, scaledHz (4310.0f))
-                    + advanceSine (voice.auxPhase, scaledHz (6120.0f))
-                    + advanceSine (voice.syncPhase, scaledHz (9150.0f));
-                const auto wash = noise * (0.86f + brightness * 0.08f);
-                output = (cluster * 0.11f + wash * 0.82f) * std::exp (-age * 2.9f);
-                output += noise * 0.08f * std::exp (-age * 10.0f);
-                break;
-            }
-            case DrumVoiceKind::ride:
-            {
-                duration = 1.85f;
-                const auto bell = advanceSine (voice.phase, scaledHz (612.0f));
-                const auto metallic =
-                    advanceSine (voice.fmPhase, scaledHz (3020.0f))
-                    + advanceSine (voice.auxPhase, scaledHz (4680.0f))
-                    + advanceSine (voice.syncPhase, scaledHz (7010.0f));
-                output = (bell * 0.34f * std::exp (-age * 2.1f)) + ((metallic * 0.16f) + (noise * 0.22f)) * std::exp (-age * 2.7f);
-                break;
-            }
-            case DrumVoiceKind::cowbell:
-            {
-                duration = 0.42f;
-                const auto bellA = advanceSquare (voice.phase, scaledHz (541.0f));
-                const auto bellB = advanceSquare (voice.fmPhase, scaledHz (811.0f));
-                const auto env = std::exp (-age * 8.8f);
-                output = ((bellA * 0.46f) + (bellB * 0.34f)) * env;
-                break;
-            }
-            case DrumVoiceKind::clave:
-            {
-                duration = 0.14f;
-                const auto body = advanceSine (voice.phase, scaledHz (2470.0f)) * std::exp (-age * 28.0f);
-                const auto click = noise * std::exp (-age * 96.0f);
-                output = body + (click * 0.05f);
-                break;
-            }
-            case DrumVoiceKind::maraca:
-            {
-                duration = 0.18f;
-                const auto shaker = noise * std::exp (-age * 20.0f);
-                const auto grain = advanceSine (voice.phase, scaledHz (5200.0f)) * 0.08f * std::exp (-age * 26.0f);
-                output = shaker * 0.82f + grain;
-                break;
-            }
-            case DrumVoiceKind::perc:
-            default:
-            {
-                duration = 0.38f;
-                const auto squareA = advanceSquare (voice.phase, scaledHz (540.0f));
-                const auto squareB = advanceSquare (voice.fmPhase, scaledHz (846.0f));
-                output = (squareA * 0.42f + squareB * 0.34f) * std::exp (-age * 9.4f);
-                output += noise * 0.08f * std::exp (-age * 20.0f);
-                break;
-            }
-        }
-    }
-    else
     {
         switch (kind)
         {
@@ -4294,7 +4392,7 @@ float AdvancedVSTiAudioProcessor::renderDrumVoiceSample (VoiceState& voice)
     const auto body = smoothTowards (output, toneCoeff, voice.colourState);
     const auto edge = output - body;
     output = (body * juce::jmap (brightness, 1.2f, 0.8f)) + (edge * juce::jmap (brightness, 0.3f, 1.7f));
-    output = softSaturate (output * (1.08f + punch * 0.26f + noiseMacro * 0.08f)) * (buildFlavor() == InstrumentFlavor::drum808 ? 0.94f : 0.92f);
+    output = softSaturate (output * (1.08f + punch * 0.26f + noiseMacro * 0.08f)) * 0.92f;
 
     voice.noteAge += dt;
     if (voice.noteAge >= duration)
@@ -4712,17 +4810,6 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         s = smoothTowards (s, 0.11f, voice.toneState);
         s = softSaturate (s * 1.18f) * 0.9f;
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
-    {
-        voice.auxPhase = std::fmod (voice.auxPhase + 0.12f / static_cast<float> (currentSampleRate), 1.0f);
-        const auto driftA = std::sin (twoPi * voice.auxPhase) * 0.006f;
-        const auto driftB = std::sin (twoPi * std::fmod (voice.auxPhase + 0.31f, 1.0f)) * 0.008f;
-        const auto ensembleA = std::sin (twoPi * std::fmod (voice.phase + driftA, 1.0f));
-        const auto ensembleB = std::sin (twoPi * std::fmod ((voice.phase * 1.004f) + driftB + 0.17f, 1.0f));
-        s = (s * 0.74f) + (ensembleA * 0.14f) + (ensembleB * 0.12f);
-        s = smoothTowards (s, 0.04f, voice.toneState);
-        s = softSaturate (s * 1.08f) * 0.9f;
-    }
     else if constexpr (buildFlavor() == InstrumentFlavor::leadSynth)
     {
         voice.auxPhase = std::fmod (voice.auxPhase + 4.6f / static_cast<float> (currentSampleRate), 1.0f);
@@ -5099,20 +5186,6 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
                 * 0.96f;
         }
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::acid303)
-    {
-        const auto saw = (2.0f * voice.phase) - 1.0f;
-        const auto square = voice.phase < 0.5f ? 1.0f : -1.0f;
-        const auto waveform = params.oscType == OscType::square ? square : saw;
-        const auto squelch = std::sin (twoPi * std::fmod ((voice.phase * 2.05f) + (voice.fmPhase * 0.07f), 1.0f));
-        const auto accent = juce::jlimit (0.75f, 1.35f, 0.75f + (voice.velocity * 0.85f));
-        const auto notePush = std::exp (-voice.noteAge * 7.2f);
-        const auto grip = juce::jmap (juce::jlimit (0.0f, 1.0f, params.fmAmount / 1000.0f), 0.14f, 0.62f);
-        s = (waveform * 0.86f) + (squelch * grip * notePush);
-        s += std::sin (twoPi * std::fmod (voice.phase * 0.5f, 1.0f)) * 0.05f;
-        s = smoothTowards (s, 0.14f, voice.toneState);
-        s = softSaturate (s * (1.45f + (params.resonance * 0.42f))) * 0.92f * accent;
-    }
     else if constexpr (buildFlavor() == InstrumentFlavor::advanced)
     {
         const auto osc2Shape = juce::jlimit (0.05f, 0.95f, params.osc2PulseWidth + voiceMod.pulseWidth + voiceMod.shape);
@@ -5194,8 +5267,7 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
 void AdvancedVSTiAudioProcessor::updateRenderParameters()
 {
     renderParams.oscType = static_cast<OscType> (paramIndex (apvts, "OSCTYPE"));
-    if constexpr (buildFlavor() == InstrumentFlavor::stringSynth
-                  || buildFlavor() == InstrumentFlavor::stringEnsemble)
+    if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
         renderParams.polyphony = juce::jlimit (1, voiceLimitForFlavor(), paramIndex (apvts, "POLYPHONY"));
     else
         renderParams.polyphony = voiceLimitForFlavor();
@@ -5203,7 +5275,7 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     renderParams.lfo1Shape = paramIndex (apvts, "LFO1SHAPE");
     renderParams.lfo2Shape = paramIndex (apvts, "LFO2SHAPE");
     renderParams.lfo3Shape = 0;
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         renderParams.lfo3Shape = paramIndex (apvts, "LFO3SHAPE");
     renderParams.arpMode = paramIndex (apvts, "ARPMODE");
     renderParams.arpEnabled = false;
@@ -5227,7 +5299,7 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     else
         renderParams.filterType = juce::jlimit (0, 3, paramIndex (apvts, "FILTERTYPE"));
 
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         renderParams.masterLevel = paramValue (apvts, "MASTERLEVEL");
 
     renderParams.detune = paramValue (apvts, "DETUNE");
@@ -5341,25 +5413,79 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     renderParams.rhythmGateDepth = renderParams.lfo3Enabled ? paramValue (apvts, "RHYTHMGATE_DEPTH") : 0.0f;
     renderParams.fxMix = paramValue (apvts, "FXMIX");
     renderParams.fxIntensity = paramValue (apvts, "FXINTENSITY");
-    renderParams.fxRate = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "FXRATE") : 0.65f;
-    renderParams.fxColour = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "FXCOLOUR") : 0.5f;
-    renderParams.fxSpread = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "FXSPREAD") : 0.4f;
+    renderParams.fxRate = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "FXRATE") : 0.65f;
+    renderParams.fxColour = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "FXCOLOUR") : 0.5f;
+    renderParams.fxSpread = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "FXSPREAD") : 0.4f;
+    renderParams.inputGainDb = paramValue (apvts, "INPUTGAIN");
+    renderParams.outputGainDb = paramValue (apvts, "OUTPUTGAIN");
+    renderParams.drive = paramValue (apvts, "DRIVE");
+    renderParams.tone = paramValue (apvts, "TONE");
+    renderParams.presence = paramValue (apvts, "PRESENCE");
+    renderParams.thresholdDb = paramValue (apvts, "THRESHOLD");
+    renderParams.ratio = paramValue (apvts, "RATIO");
+    renderParams.compressorAttackMs = paramValue (apvts, "COMPATTACK");
+    renderParams.compressorReleaseMs = paramValue (apvts, "COMPRELEASE");
+    renderParams.makeupGainDb = paramValue (apvts, "MAKEUPGAIN");
+    renderParams.bitDepth = juce::jlimit (2, 16, paramIndex (apvts, "BITDEPTH"));
+    renderParams.sampleReduce = juce::jlimit (1, 32, paramIndex (apvts, "SAMPLEREDUCE"));
+    renderParams.ampModel = paramIndex (apvts, "AMPMODEL");
+    renderParams.gateFloor = paramValue (apvts, "GATEFLOOR");
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+    {
+        renderParams.timingSyncEnabled = paramIndex (apvts, "TIMEMODE") > 0;
+        renderParams.timingDivisionIndex = paramIndex (apvts, "TIMEDIV");
+        renderParams.delayRightDivisionIndex = paramIndex (apvts, "DELAYDIVRIGHT");
+        renderParams.delayFilterLeftMode = paramIndex (apvts, "DELAYFILTERLEFT");
+        renderParams.delayFilterRightMode = paramIndex (apvts, "DELAYFILTERRIGHT");
+        renderParams.delayFilterCutoffLeft = paramValue (apvts, "DELAYCUTOFFLEFT");
+        renderParams.delayFilterCutoffRight = paramValue (apvts, "DELAYCUTOFFRIGHT");
+    }
+    else if constexpr (isEffectFlavor())
+    {
+        renderParams.timingSyncEnabled = paramIndex (apvts, "TIMEMODE") > 0;
+        renderParams.timingDivisionIndex = paramIndex (apvts, "TIMEDIV");
+        renderParams.delayRightDivisionIndex = renderParams.timingDivisionIndex;
+        renderParams.delayFilterLeftMode = 1;
+        renderParams.delayFilterRightMode = 1;
+        renderParams.delayFilterCutoffLeft = 8500.0f;
+        renderParams.delayFilterCutoffRight = 8500.0f;
+    }
+    else
+    {
+        renderParams.timingSyncEnabled = false;
+        renderParams.timingDivisionIndex = 11;
+        renderParams.delayRightDivisionIndex = 11;
+        renderParams.delayFilterLeftMode = 1;
+        renderParams.delayFilterRightMode = 1;
+        renderParams.delayFilterCutoffLeft = 8500.0f;
+        renderParams.delayFilterCutoffRight = 8500.0f;
+    }
     renderParams.delaySend = paramValue (apvts, "DELAYSEND");
     renderParams.delayTimeSec = paramValue (apvts, "DELAYTIME");
     renderParams.delayFeedback = paramValue (apvts, "DELAYFEEDBACK");
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+    {
+        renderParams.delayTimeRightSec = paramValue (apvts, "DELAYTIMERIGHT");
+        renderParams.delayFeedbackRight = paramValue (apvts, "DELAYFEEDBACKRIGHT");
+    }
+    else
+    {
+        renderParams.delayTimeRightSec = renderParams.delayTimeSec;
+        renderParams.delayFeedbackRight = renderParams.delayFeedback;
+    }
     renderParams.reverbMix = paramValue (apvts, "REVERBMIX");
-    renderParams.reverbTime = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "REVERBTIME") : 0.45f;
-    renderParams.reverbDamping = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "REVERBDAMP") : 0.45f;
-    renderParams.lowEqGainDb = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "LOWEQGAIN") : 0.0f;
-    renderParams.lowEqFreq = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "LOWEQFREQ") : 220.0f;
-    renderParams.lowEqQ = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "LOWEQQ") : 0.8f;
-    renderParams.midEqGainDb = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "MIDEQGAIN") : 0.0f;
-    renderParams.midEqFreq = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "MIDEQFREQ") : 1400.0f;
-    renderParams.midEqQ = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "MIDEQQ") : 1.1f;
-    renderParams.highEqGainDb = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "HIGHEQGAIN") : 0.0f;
-    renderParams.highEqFreq = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "HIGHEQFREQ") : 5000.0f;
-    renderParams.highEqQ = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "HIGHEQQ") : 0.8f;
-    renderParams.saturationType = buildFlavor() == InstrumentFlavor::advanced ? paramIndex (apvts, "SATURATIONTYPE") : 0;
+    renderParams.reverbTime = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "REVERBTIME") : 0.45f;
+    renderParams.reverbDamping = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "REVERBDAMP") : 0.45f;
+    renderParams.lowEqGainDb = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "LOWEQGAIN") : 0.0f;
+    renderParams.lowEqFreq = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "LOWEQFREQ") : 220.0f;
+    renderParams.lowEqQ = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "LOWEQQ") : 0.8f;
+    renderParams.midEqGainDb = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "MIDEQGAIN") : 0.0f;
+    renderParams.midEqFreq = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "MIDEQFREQ") : 1400.0f;
+    renderParams.midEqQ = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "MIDEQQ") : 1.1f;
+    renderParams.highEqGainDb = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "HIGHEQGAIN") : 0.0f;
+    renderParams.highEqFreq = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "HIGHEQFREQ") : 5000.0f;
+    renderParams.highEqQ = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "HIGHEQQ") : 0.8f;
+    renderParams.saturationType = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramIndex (apvts, "SATURATIONTYPE") : 0;
 
     for (auto& slot : renderParams.modulationMatrix)
     {
@@ -5459,6 +5585,18 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
 void AdvancedVSTiAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    if constexpr (isEffectFlavor())
+    {
+        for (int channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
+            buffer.clear (channel, 0, buffer.getNumSamples());
+
+        updateRenderParameters();
+        processNativeEffectBlock (buffer);
+        juce::ignoreUnused (midiMessages);
+        return;
+    }
+
     buffer.clear();
 
     updateRenderParameters();
@@ -5697,9 +5835,7 @@ void AdvancedVSTiAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         hasMidi = midiIterator.getNextEvent (nextMidiMessage, nextMidiSample);
     }
 
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced
-                  || buildFlavor() == InstrumentFlavor::stringSynth
-                  || isAcousticFlavor())
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isAcousticFlavor())
     {
         if constexpr (buildFlavor() == InstrumentFlavor::advanced)
         {
@@ -6009,6 +6145,340 @@ void AdvancedVSTiAudioProcessor::refreshEqFiltersIfNeeded()
     cachedEqSettings.highEqQ = highEqQ;
 }
 
+void AdvancedVSTiAudioProcessor::processNativeEffectBlock (juce::AudioBuffer<float>& buffer)
+{
+    if (buffer.getNumChannels() < 2 || buffer.getNumSamples() <= 0)
+        return;
+
+    const auto hostBpm = [this]
+    {
+        if (auto* playHead = getPlayHead())
+        {
+            juce::AudioPlayHead::CurrentPositionInfo positionInfo;
+            if (playHead->getCurrentPosition (positionInfo) && positionInfo.bpm > 1.0)
+                return positionInfo.bpm;
+        }
+
+        return 120.0;
+    }();
+
+    const auto timingSyncEnabled = renderParams.timingSyncEnabled;
+    const auto syncedTimingSeconds = timingSyncEnabled
+                                         ? nativeFxTimingSecondsFromBpm (hostBpm, renderParams.timingDivisionIndex)
+                                         : 0.0;
+
+    auto* left = buffer.getWritePointer (0);
+    auto* right = buffer.getWritePointer (1);
+    const auto numSamples = buffer.getNumSamples();
+
+    buffer.applyGain (juce::Decibels::decibelsToGain (renderParams.inputGainDb));
+
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+    {
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        const auto feedbackLeft = juce::jlimit (0.0f, 0.96f, renderParams.delayFeedback);
+        const auto feedbackRight = juce::jlimit (0.0f, 0.96f, renderParams.delayFeedbackRight);
+        const auto delayTimeSecondsLeft = static_cast<float> (timingSyncEnabled
+                                                                  ? nativeFxTimingSecondsFromBpm (hostBpm, renderParams.timingDivisionIndex)
+                                                                  : renderParams.delayTimeSec);
+        const auto delayTimeSecondsRight = static_cast<float> (timingSyncEnabled
+                                                                   ? nativeFxTimingSecondsFromBpm (hostBpm, renderParams.delayRightDivisionIndex)
+                                                                   : renderParams.delayTimeRightSec);
+        const auto delaySamplesLeft = juce::jlimit (1,
+                                                    juce::jmax (1, delayBuffer.getNumSamples() - 1),
+                                                    juce::roundToInt (delayTimeSecondsLeft * static_cast<float> (currentSampleRate)));
+        const auto delaySamplesRight = juce::jlimit (1,
+                                                     juce::jmax (1, delayBuffer.getNumSamples() - 1),
+                                                     juce::roundToInt (delayTimeSecondsRight * static_cast<float> (currentSampleRate)));
+        const auto cutoffLeft = juce::jlimit (60.0f, 18000.0f, renderParams.delayFilterCutoffLeft);
+        const auto cutoffRight = juce::jlimit (60.0f, 18000.0f, renderParams.delayFilterCutoffRight);
+        const auto bufferSize = delayBuffer.getNumSamples();
+        auto* delayLeft = delayBuffer.getWritePointer (0);
+        auto* delayRight = delayBuffer.getWritePointer (1);
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const auto dryL = left[sample];
+            const auto dryR = right[sample];
+            const auto readPositionLeft = (delayWritePosition + bufferSize - delaySamplesLeft) % bufferSize;
+            const auto readPositionRight = (delayWritePosition + bufferSize - delaySamplesRight) % bufferSize;
+            const auto wetL = delayLeft[readPositionLeft];
+            const auto wetR = delayRight[readPositionRight];
+            const auto filteredL = processDelayDecayFilter (wetL,
+                                                            renderParams.delayFilterLeftMode,
+                                                            cutoffLeft,
+                                                            currentSampleRate,
+                                                            delayFeedbackStateLeft);
+            const auto filteredR = processDelayDecayFilter (wetR,
+                                                            renderParams.delayFilterRightMode,
+                                                            cutoffRight,
+                                                            currentSampleRate,
+                                                            delayFeedbackStateRight);
+
+            delayLeft[delayWritePosition] = dryL + (filteredL * feedbackLeft);
+            delayRight[delayWritePosition] = dryR + (filteredR * feedbackRight);
+            delayWritePosition = (delayWritePosition + 1) % bufferSize;
+
+            left[sample] = juce::jmap (mix, dryL, filteredL);
+            right[sample] = juce::jmap (mix, dryR, filteredR);
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::reverbFx)
+    {
+        juce::AudioBuffer<float> wetBuffer;
+        wetBuffer.makeCopyOf (buffer, true);
+
+        juce::Reverb::Parameters reverbParams;
+        reverbParams.roomSize = timingSyncEnabled
+                                    ? reverbRoomSizeFromSeconds (syncedTimingSeconds)
+                                    : juce::jlimit (0.05f, 1.0f, renderParams.reverbTime);
+        reverbParams.damping = juce::jlimit (0.0f, 1.0f, renderParams.reverbDamping);
+        reverbParams.wetLevel = 1.0f;
+        reverbParams.dryLevel = 0.0f;
+        reverbParams.width = juce::jlimit (0.0f, 1.0f, 0.35f + renderParams.fxSpread * 0.65f);
+        reverbParams.freezeMode = 0.0f;
+        reverb.setParameters (reverbParams);
+        reverb.processStereo (wetBuffer.getWritePointer (0), wetBuffer.getWritePointer (1), wetBuffer.getNumSamples());
+
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            left[sample] = juce::jmap (mix, left[sample], wetBuffer.getSample (0, sample));
+            right[sample] = juce::jmap (mix, right[sample], wetBuffer.getSample (1, sample));
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::chorusFx
+                       || buildFlavor() == InstrumentFlavor::flangerFx
+                       || buildFlavor() == InstrumentFlavor::phaserFx)
+    {
+        juce::AudioBuffer<float> wetBuffer;
+        wetBuffer.makeCopyOf (buffer, true);
+        juce::dsp::AudioBlock<float> wetBlock (wetBuffer);
+        auto leftBlock = wetBlock.getSingleChannelBlock (0);
+        auto rightBlock = wetBlock.getSingleChannelBlock (1);
+        juce::dsp::ProcessContextReplacing<float> leftContext (leftBlock);
+        juce::dsp::ProcessContextReplacing<float> rightContext (rightBlock);
+
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        const auto rate = timingSyncEnabled
+                              ? juce::jlimit (0.02f, 12.0f, static_cast<float> (1.0 / juce::jmax (0.05, syncedTimingSeconds)))
+                              : juce::jlimit (0.02f, 8.0f, renderParams.fxRate);
+        const auto colour = juce::jlimit (0.0f, 1.0f, renderParams.fxColour);
+        const auto spread = juce::jlimit (0.0f, 1.0f, renderParams.fxSpread);
+        const auto depth = juce::jlimit (0.0f, 1.0f, renderParams.fxIntensity);
+
+        if constexpr (buildFlavor() == InstrumentFlavor::chorusFx)
+        {
+            chorusLeft.setRate (rate);
+            chorusRight.setRate (timingSyncEnabled ? rate : rate * (1.02f + spread * 0.06f));
+            chorusLeft.setDepth (juce::jlimit (0.05f, 0.95f, 0.18f + depth * 0.72f));
+            chorusRight.setDepth (juce::jlimit (0.05f, 0.95f, 0.2f + depth * 0.68f));
+            chorusLeft.setCentreDelay (5.0f + colour * 12.0f);
+            chorusRight.setCentreDelay (5.7f + colour * 12.0f + spread * 1.8f);
+            chorusLeft.setFeedback (juce::jlimit (-0.25f, 0.55f, -0.04f + spread * 0.4f));
+            chorusRight.setFeedback (juce::jlimit (-0.25f, 0.55f, -0.02f + spread * 0.38f));
+            chorusLeft.process (leftContext);
+            chorusRight.process (rightContext);
+        }
+        else if constexpr (buildFlavor() == InstrumentFlavor::flangerFx)
+        {
+            flangerLeft.setRate (timingSyncEnabled ? rate : rate * 0.55f);
+            flangerRight.setRate (timingSyncEnabled ? rate : rate * (0.58f + spread * 0.08f));
+            flangerLeft.setDepth (juce::jlimit (0.08f, 0.98f, 0.22f + depth * 0.74f));
+            flangerRight.setDepth (juce::jlimit (0.08f, 0.98f, 0.25f + depth * 0.7f));
+            flangerLeft.setCentreDelay (0.7f + colour * 4.8f);
+            flangerRight.setCentreDelay (0.95f + colour * 4.4f + spread);
+            flangerLeft.setFeedback (juce::jlimit (-0.85f, 0.85f, spread * 1.35f - 0.65f));
+            flangerRight.setFeedback (juce::jlimit (-0.85f, 0.85f, spread * 1.3f - 0.62f));
+            flangerLeft.process (leftContext);
+            flangerRight.process (rightContext);
+        }
+        else
+        {
+            phaserLeft.setRate (timingSyncEnabled ? rate : rate * 0.72f);
+            phaserRight.setRate (timingSyncEnabled ? rate : rate * (0.75f + spread * 0.05f));
+            phaserLeft.setDepth (juce::jlimit (0.05f, 0.95f, 0.18f + depth * 0.7f));
+            phaserRight.setDepth (juce::jlimit (0.05f, 0.95f, 0.21f + depth * 0.66f));
+            phaserLeft.setCentreFrequency (180.0f + colour * 2400.0f);
+            phaserRight.setCentreFrequency ((180.0f + colour * 2400.0f) * (1.04f + spread * 0.08f));
+            phaserLeft.setFeedback (juce::jlimit (-0.55f, 0.78f, spread * 0.95f - 0.12f));
+            phaserRight.setFeedback (juce::jlimit (-0.55f, 0.78f, spread * 0.92f - 0.1f));
+            phaserLeft.process (leftContext);
+            phaserRight.process (rightContext);
+        }
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            left[sample] = juce::jmap (mix, left[sample], wetBuffer.getSample (0, sample));
+            right[sample] = juce::jmap (mix, right[sample], wetBuffer.getSample (1, sample));
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::overdriveFx
+                       || buildFlavor() == InstrumentFlavor::distortionFx)
+    {
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        const auto toneCutoff = juce::jmap (juce::jlimit (0.0f, 1.0f, renderParams.tone), 850.0f, 9000.0f);
+        const auto asymmetry = juce::jlimit (-0.35f, 0.35f, renderParams.fxSpread * 0.7f - 0.35f);
+        const auto drive = buildFlavor() == InstrumentFlavor::overdriveFx
+                               ? (1.4f + renderParams.drive * 14.0f)
+                               : (4.0f + renderParams.drive * 28.0f);
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const auto dryL = left[sample];
+            const auto dryR = right[sample];
+            auto wetL = saturateWithMode (dryL + asymmetry, renderParams.saturationType, drive);
+            auto wetR = saturateWithMode (dryR - asymmetry, renderParams.saturationType, drive);
+            wetL = onePoleLowPass (wetL, toneCutoff, currentSampleRate, driveToneStateLeft);
+            wetR = onePoleLowPass (wetR, toneCutoff, currentSampleRate, driveToneStateRight);
+
+            if constexpr (buildFlavor() == InstrumentFlavor::distortionFx)
+            {
+                wetL = juce::jlimit (-1.1f, 1.1f, wetL * 1.08f);
+                wetR = juce::jlimit (-1.1f, 1.1f, wetR * 1.08f);
+            }
+
+            left[sample] = juce::jmap (mix, dryL, wetL);
+            right[sample] = juce::jmap (mix, dryR, wetR);
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::compressorFx)
+    {
+        compressorLeft.setThreshold (renderParams.thresholdDb);
+        compressorRight.setThreshold (renderParams.thresholdDb);
+        compressorLeft.setRatio (juce::jlimit (1.0f, 20.0f, renderParams.ratio));
+        compressorRight.setRatio (juce::jlimit (1.0f, 20.0f, renderParams.ratio));
+        compressorLeft.setAttack (juce::jlimit (0.1f, 200.0f, renderParams.compressorAttackMs));
+        compressorRight.setAttack (juce::jlimit (0.1f, 200.0f, renderParams.compressorAttackMs));
+        compressorLeft.setRelease (juce::jlimit (5.0f, 500.0f, renderParams.compressorReleaseMs));
+        compressorRight.setRelease (juce::jlimit (5.0f, 500.0f, renderParams.compressorReleaseMs));
+
+        juce::AudioBuffer<float> wetBuffer;
+        wetBuffer.makeCopyOf (buffer, true);
+        juce::dsp::AudioBlock<float> wetBlock (wetBuffer);
+        auto leftBlock = wetBlock.getSingleChannelBlock (0);
+        auto rightBlock = wetBlock.getSingleChannelBlock (1);
+        juce::dsp::ProcessContextReplacing<float> leftContext (leftBlock);
+        juce::dsp::ProcessContextReplacing<float> rightContext (rightBlock);
+        compressorLeft.process (leftContext);
+        compressorRight.process (rightContext);
+        wetBuffer.applyGain (juce::Decibels::decibelsToGain (renderParams.makeupGainDb));
+
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            left[sample] = juce::jmap (mix, left[sample], wetBuffer.getSample (0, sample));
+            right[sample] = juce::jmap (mix, right[sample], wetBuffer.getSample (1, sample));
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::ampEmulatorFx)
+    {
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        const auto drive = 1.5f + renderParams.drive * 18.0f;
+        const auto toneCutoff = juce::jmap (juce::jlimit (0.0f, 1.0f, renderParams.tone), 1400.0f, 7000.0f);
+        const auto presenceCutoff = juce::jmap (juce::jlimit (0.0f, 1.0f, renderParams.presence), 1800.0f, 6200.0f);
+
+        float modelDrive = 1.0f;
+        float cabCutoff = 4800.0f;
+        float lowCut = 80.0f;
+        float asymmetry = 0.06f;
+        switch (juce::jlimit (0, 3, renderParams.ampModel))
+        {
+            case 1:
+                modelDrive = 1.4f;
+                cabCutoff = 4300.0f;
+                asymmetry = 0.1f;
+                break;
+            case 2:
+                modelDrive = 1.9f;
+                cabCutoff = 3600.0f;
+                asymmetry = 0.16f;
+                break;
+            case 3:
+                modelDrive = 1.2f;
+                cabCutoff = 2800.0f;
+                lowCut = 45.0f;
+                asymmetry = 0.04f;
+                break;
+            default:
+                modelDrive = 1.0f;
+                cabCutoff = 5400.0f;
+                break;
+        }
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const auto dryL = left[sample];
+            const auto dryR = right[sample];
+
+            auto wetL = onePoleHighPass (dryL, lowCut, currentSampleRate, ampHighpassStateLeft);
+            auto wetR = onePoleHighPass (dryR, lowCut, currentSampleRate, ampHighpassStateRight);
+            wetL = saturateWithMode (wetL + asymmetry, renderParams.saturationType, drive * modelDrive);
+            wetR = saturateWithMode (wetR - asymmetry, renderParams.saturationType, drive * modelDrive);
+            wetL = onePoleLowPass (wetL, toneCutoff, currentSampleRate, ampToneStateLeft);
+            wetR = onePoleLowPass (wetR, toneCutoff, currentSampleRate, ampToneStateRight);
+
+            const auto presenceL = wetL - onePoleLowPass (wetL, presenceCutoff, currentSampleRate, ampPresenceStateLeft);
+            const auto presenceR = wetR - onePoleLowPass (wetR, presenceCutoff, currentSampleRate, ampPresenceStateRight);
+            wetL += presenceL * (0.18f + renderParams.presence * 0.85f);
+            wetR += presenceR * (0.18f + renderParams.presence * 0.85f);
+            wetL = onePoleLowPass (wetL, cabCutoff, currentSampleRate, ampCabStateLeft);
+            wetR = onePoleLowPass (wetR, cabCutoff, currentSampleRate, ampCabStateRight);
+
+            left[sample] = juce::jmap (mix, dryL, wetL);
+            right[sample] = juce::jmap (mix, dryR, wetR);
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::bitCrusherFx)
+    {
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        const auto holdSamples = juce::jmax (1, renderParams.sampleReduce);
+        const auto quantiseSteps = static_cast<float> (1 << juce::jlimit (1, 15, renderParams.bitDepth - 1));
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            if (bitCrusherCounter <= 0)
+            {
+                bitCrusherHeldLeft = std::round (left[sample] * quantiseSteps) / quantiseSteps;
+                bitCrusherHeldRight = std::round (right[sample] * quantiseSteps) / quantiseSteps;
+                bitCrusherCounter = holdSamples;
+            }
+
+            const auto dryL = left[sample];
+            const auto dryR = right[sample];
+            left[sample] = juce::jmap (mix, dryL, bitCrusherHeldLeft);
+            right[sample] = juce::jmap (mix, dryR, bitCrusherHeldRight);
+            --bitCrusherCounter;
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::rhythmGateFx)
+    {
+        const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
+        const auto depth = juce::jlimit (0.0f, 1.0f, renderParams.rhythmGateDepth);
+        const auto floor = juce::jlimit (0.0f, 1.0f, renderParams.gateFloor);
+        const auto stereoOffset = juce::jlimit (0.0f, 0.45f, renderParams.fxSpread * 0.35f);
+        const auto gateRateHz = timingSyncEnabled
+                                    ? static_cast<float> (1.0 / juce::jmax (0.03, syncedTimingSeconds))
+                                    : renderParams.rhythmGateRate;
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const auto rightPhase = std::fmod (lfo3Phase + stereoOffset, 1.0f);
+            const auto gateL = 0.5f * (lfoValue (renderParams.lfo3Shape, lfo3Phase) + 1.0f);
+            const auto gateR = 0.5f * (lfoValue (renderParams.lfo3Shape, rightPhase) + 1.0f);
+            const auto gainL = juce::jmap (depth, 1.0f, juce::jmap (gateL, floor, 1.0f));
+            const auto gainR = juce::jmap (depth, 1.0f, juce::jmap (gateR, floor, 1.0f));
+            const auto dryL = left[sample];
+            const auto dryR = right[sample];
+            left[sample] = juce::jmap (mix, dryL, dryL * gainL);
+            right[sample] = juce::jmap (mix, dryR, dryR * gainR);
+            lfo3Phase = std::fmod (lfo3Phase + gateRateHz / static_cast<float> (currentSampleRate), 1.0f);
+        }
+    }
+
+    buffer.applyGain (juce::Decibels::decibelsToGain (renderParams.outputGainDb));
+}
+
 void AdvancedVSTiAudioProcessor::applyEnvelopeSettings()
 {
     for (auto& voice : voices)
@@ -6050,9 +6520,9 @@ void AdvancedVSTiAudioProcessor::setStateInformation (const void* data, int size
     pendingPresetIndex.store (-1);
     currentProgramIndex = juce::jlimit (0, juce::jmax (0, getNumPrograms() - 1), paramIndex (apvts, "PRESET"));
     updateRenderParameters();
-    if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
+    if constexpr (! isEffectFlavor() && buildFlavor() != InstrumentFlavor::vec1DrumPad)
         refreshSampleBank();
-    else
+    else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
         refreshExternalPadSamples();
     applyEnvelopeSettings();
 }
@@ -6140,6 +6610,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     float fxRateDefault = 0.65f;
     float fxColourDefault = 0.5f;
     float fxSpreadDefault = 0.4f;
+    float inputGainDefault = 0.0f;
+    float outputGainDefault = 0.0f;
+    float driveAmountDefault = 0.4f;
+    float toneDefault = 0.5f;
+    float presenceDefault = 0.5f;
+    float thresholdDefault = -18.0f;
+    float ratioDefault = 4.0f;
+    float compAttackDefault = 15.0f;
+    float compReleaseDefault = 120.0f;
+    float makeupGainDefault = 0.0f;
+    int bitDepthDefault = 8;
+    int sampleReduceDefault = 4;
+    int ampModelDefault = 0;
+    float gateFloorDefault = 0.0f;
+    int timingModeDefault = 0;
+    int timingDivisionDefault = 11;
+    int delayRightDivisionDefault = 11;
+    float delayTimeRightDefault = 0.34f;
+    float delayFeedbackRightDefault = 0.25f;
+    int delayFilterLeftDefault = 1;
+    int delayFilterRightDefault = 1;
+    float delayCutoffLeftDefault = 8500.0f;
+    float delayCutoffRightDefault = 8500.0f;
     float delaySendDefault = 0.0f;
     float delayTimeDefault = 0.34f;
     float delayFeedbackDefault = 0.25f;
@@ -6211,35 +6704,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         drumVoiceDecayDefaults = drumMachineVoiceDecayDefaults;
         drumVoiceLevelDefaults = drumMachineVoiceLevelDefaults;
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::drum808)
-    {
-        oscDefault = 0;
-        detuneDefault = 0.0f;
-        filterTypeDefault = 1;
-        gateDefault = 0.95f;
-        ampAttackDefault = 0.001f;
-        ampDecayDefault = 0.34f;
-        ampSustainDefault = 0.0f;
-        ampReleaseDefault = 0.12f;
-        filtAttackDefault = 0.001f;
-        filtDecayDefault = 0.16f;
-        filtSustainDefault = 0.0f;
-        filtReleaseDefault = 0.1f;
-        fmDefault = 90.0f;
-        syncDefault = 0.08f;
-        cutoffDefault = 9200.0f;
-        resonanceDefault = 0.16f;
-        filterEnvAmountDefault = 0.05f;
-        rhythmRateDefault = 16.0f;
-        rhythmDepthDefault = 0.0f;
-        drumMasterLevelDefault = 1.0f;
-        drumKickAttackDefault = 0.34f;
-        drumSnareToneDefault = 0.48f;
-        drumSnareSnappyDefault = 0.54f;
-        drumVoiceTuneDefaults = drum808VoiceTuneDefaults;
-        drumVoiceDecayDefaults = drum808VoiceDecayDefaults;
-        drumVoiceLevelDefaults = drum808VoiceLevelDefaults;
-    }
     else if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
     {
         oscDefault = 4;
@@ -6284,41 +6748,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         lfo1RateDefault = 0.1f;
         lfo2RateDefault = 0.2f;
         lfo2FilterDefault = 0.0f;
-    }
-    else if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
-    {
-        oscDefault = 1;
-        polyphonyDefault = 16;
-        unisonDefault = 2;
-        detuneDefault = 0.035f;
-        gateDefault = 8.0f;
-        ampAttackDefault = 0.3f;
-        ampDecayDefault = 0.7f;
-        ampSustainDefault = 0.88f;
-        ampReleaseDefault = 1.1f;
-        filtAttackDefault = 0.12f;
-        filtDecayDefault = 0.52f;
-        filtSustainDefault = 0.72f;
-        filtReleaseDefault = 0.9f;
-        envCurveDefault = -0.08f;
-        cutoffDefault = 3200.0f;
-        resonanceDefault = 0.12f;
-        filterEnvAmountDefault = 0.08f;
-        lfo1RateDefault = 0.08f;
-        lfo1PitchDefault = 0.0f;
-        lfo2RateDefault = 0.08f;
-        lfo2FilterDefault = 0.0f;
-        rhythmDepthDefault = 0.0f;
-        fxTypeDefault = 3;
-        fxMixDefault = 0.16f;
-        fxIntensityDefault = 0.24f;
-        fxRateDefault = 0.42f;
-        fxColourDefault = 0.54f;
-        fxSpreadDefault = 0.48f;
-        delaySendDefault = 0.08f;
-        delayTimeDefault = 0.34f;
-        delayFeedbackDefault = 0.22f;
-        reverbMixDefault = 0.14f;
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::leadSynth)
     {
@@ -6611,30 +7040,102 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         lfo1RateDefault = 0.04f;
         lfo2RateDefault = 0.03f;
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::acid303)
+    else if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
     {
-        oscDefault = 1;
-        unisonDefault = 1;
-        detuneDefault = 0.0f;
-        fmDefault = 460.0f;
-        syncDefault = 0.08f;
-        gateDefault = 0.55f;
-        ampAttackDefault = 0.001f;
-        ampDecayDefault = 0.32f;
-        ampSustainDefault = 0.0f;
-        ampReleaseDefault = 0.14f;
-        filtAttackDefault = 0.001f;
-        filtDecayDefault = 0.36f;
-        filtSustainDefault = 0.0f;
-        filtReleaseDefault = 0.12f;
-        envCurveDefault = 0.45f;
-        cutoffDefault = 540.0f;
-        resonanceDefault = 0.82f;
-        resonanceMax = 10.0f;
-        filterEnvAmountDefault = 0.94f;
-        lfo1RateDefault = 0.14f;
-        lfo2RateDefault = 0.22f;
-        lfo2FilterDefault = 0.06f;
+        fxMixDefault = 0.34f;
+        delayTimeDefault = 0.38f;
+        delayTimeRightDefault = 0.52f;
+        delayFeedbackDefault = 0.42f;
+        delayFeedbackRightDefault = 0.36f;
+        timingDivisionDefault = 11;
+        delayRightDivisionDefault = 10;
+        delayFilterLeftDefault = 1;
+        delayFilterRightDefault = 1;
+        delayCutoffLeftDefault = 8500.0f;
+        delayCutoffRightDefault = 6200.0f;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::reverbFx)
+    {
+        fxMixDefault = 0.3f;
+        fxSpreadDefault = 0.62f;
+        reverbTimeDefault = 0.58f;
+        reverbDampingDefault = 0.34f;
+        toneDefault = 0.55f;
+        timingDivisionDefault = 2;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::chorusFx)
+    {
+        fxMixDefault = 0.45f;
+        fxIntensityDefault = 0.36f;
+        fxRateDefault = 0.55f;
+        fxColourDefault = 0.56f;
+        fxSpreadDefault = 0.52f;
+        timingDivisionDefault = 2;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::flangerFx)
+    {
+        fxMixDefault = 0.48f;
+        fxIntensityDefault = 0.42f;
+        fxRateDefault = 0.48f;
+        fxColourDefault = 0.52f;
+        fxSpreadDefault = 0.58f;
+        timingDivisionDefault = 1;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::phaserFx)
+    {
+        fxMixDefault = 0.46f;
+        fxIntensityDefault = 0.38f;
+        fxRateDefault = 0.42f;
+        fxColourDefault = 0.5f;
+        fxSpreadDefault = 0.44f;
+        timingDivisionDefault = 3;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::overdriveFx)
+    {
+        fxMixDefault = 0.7f;
+        driveAmountDefault = 0.38f;
+        toneDefault = 0.54f;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::distortionFx)
+    {
+        fxMixDefault = 0.78f;
+        driveAmountDefault = 0.58f;
+        toneDefault = 0.48f;
+        fxSpreadDefault = 0.3f;
+        saturationTypeDefault = 2;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::compressorFx)
+    {
+        fxMixDefault = 1.0f;
+        thresholdDefault = -20.0f;
+        ratioDefault = 4.0f;
+        compAttackDefault = 18.0f;
+        compReleaseDefault = 140.0f;
+        makeupGainDefault = 2.0f;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::ampEmulatorFx)
+    {
+        fxMixDefault = 1.0f;
+        driveAmountDefault = 0.42f;
+        toneDefault = 0.56f;
+        presenceDefault = 0.46f;
+        ampModelDefault = 1;
+        saturationTypeDefault = 1;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::bitCrusherFx)
+    {
+        fxMixDefault = 0.75f;
+        bitDepthDefault = 8;
+        sampleReduceDefault = 6;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::rhythmGateFx)
+    {
+        fxMixDefault = 1.0f;
+        rhythmRateDefault = 8.0f;
+        rhythmDepthDefault = 0.8f;
+        gateFloorDefault = 0.06f;
+        fxSpreadDefault = 0.18f;
+        timingDivisionDefault = 14;
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::advanced)
     {
@@ -6708,10 +7209,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("SAMPLEBANK", "Sample Bank", sampleBankChoices(), sampleBankDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("SAMPLESTART", "Sample Start", 0.0f, 0.95f, sampleStartDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("SAMPLEEND", "Sample End", 0.05f, 1.0f, sampleEndDefault));
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("MASTERLEVEL", "Master Level", 0.0f, 1.5f, masterLevelDefault));
-    if constexpr (buildFlavor() == InstrumentFlavor::stringSynth
-                  || buildFlavor() == InstrumentFlavor::stringEnsemble)
+    if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
         params.push_back (std::make_unique<juce::AudioParameterInt> ("POLYPHONY", "Polyphony", 1, voiceLimitForFlavor(), polyphonyDefault));
     if constexpr (buildFlavor() == InstrumentFlavor::advanced)
         params.push_back (std::make_unique<juce::AudioParameterBool> ("MONOENABLE", "Mono Enabled", false));
@@ -6861,9 +7361,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("ARPGATE", "Arp Gate", 0.08f, 1.5f, arpGateDefault));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("RHYTHMGATE_RATE", "Rhythm Gate Rate", 0.25f, 32.0f, rhythmRateDefault));
+    if constexpr (isEffectFlavor())
+        params.push_back (std::make_unique<juce::AudioParameterChoice> ("TIMEMODE", "Timing Mode", juce::StringArray { "Free", "Sync" }, timingModeDefault));
+    if constexpr (isEffectFlavor())
+        params.push_back (std::make_unique<juce::AudioParameterChoice> ("TIMEDIV", "Timing Division", nativeFxTimingDivisionChoices(), timingDivisionDefault));
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+        params.push_back (std::make_unique<juce::AudioParameterChoice> ("DELAYDIVRIGHT", "Delay Right Division", nativeFxTimingDivisionChoices(), delayRightDivisionDefault));
     if constexpr (buildFlavor() == InstrumentFlavor::advanced)
         params.push_back (std::make_unique<juce::AudioParameterBool> ("LFO3ENABLE", "LFO3 Enabled", true));
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         params.push_back (std::make_unique<juce::AudioParameterChoice> ("LFO3SHAPE", "LFO3 Shape", juce::StringArray { "Sine", "Triangle", "Saw", "Noise", "Square" }, lfo3ShapeDefault));
     if constexpr (buildFlavor() == InstrumentFlavor::advanced)
         params.push_back (std::make_unique<juce::AudioParameterBool> ("LFO3ENVMODE", "LFO3 Env Mode", lfo3EnvModeDefault));
@@ -6875,21 +7381,47 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         params.push_back (std::make_unique<juce::AudioParameterChoice> ("LFO3ASSIGNDEST", "LFO3 Assign Destination", matrixDestinationChoices(), lfo3AssignDestinationDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("RHYTHMGATE_DEPTH", "Rhythm Gate Depth", 0.0f, 1.0f, rhythmDepthDefault));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("FXTYPE", "FX Type", juce::StringArray { "Off", "Distortion", "Character", "Chorus", "Phaser", "Flanger", "Ring Mod", "Freq Shift" }, fxTypeDefault));
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         params.push_back (std::make_unique<juce::AudioParameterChoice> ("SATURATIONTYPE", "Saturation Type", juce::StringArray { "Soft", "Warm", "Drive", "Fold" }, saturationTypeDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("FXMIX", "FX Mix", 0.0f, 1.0f, fxMixDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("FXINTENSITY", "FX Intensity", 0.0f, 1.0f, fxIntensityDefault));
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("FXRATE", "FX Rate", 0.02f, 12.0f, fxRateDefault));
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("FXCOLOUR", "FX Colour", 0.0f, 1.0f, fxColourDefault));
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("FXSPREAD", "FX Spread", 0.0f, 1.0f, fxSpreadDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("INPUTGAIN", "Input Gain", -24.0f, 24.0f, inputGainDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("OUTPUTGAIN", "Output Gain", -24.0f, 24.0f, outputGainDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("DRIVE", "Drive", 0.0f, 1.0f, driveAmountDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("TONE", "Tone", 0.0f, 1.0f, toneDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("PRESENCE", "Presence", 0.0f, 1.0f, presenceDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("THRESHOLD", "Threshold", -48.0f, 0.0f, thresholdDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("RATIO", "Ratio", 1.0f, 20.0f, ratioDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("COMPATTACK", "Comp Attack", 0.1f, 200.0f, compAttackDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("COMPRELEASE", "Comp Release", 5.0f, 500.0f, compReleaseDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("MAKEUPGAIN", "Makeup Gain", 0.0f, 24.0f, makeupGainDefault));
+    params.push_back (std::make_unique<juce::AudioParameterInt> ("BITDEPTH", "Bit Depth", 2, 16, bitDepthDefault));
+    params.push_back (std::make_unique<juce::AudioParameterInt> ("SAMPLEREDUCE", "Sample Reduce", 1, 32, sampleReduceDefault));
+    params.push_back (std::make_unique<juce::AudioParameterChoice> ("AMPMODEL", "Amp Model", juce::StringArray { "Clean", "Crunch", "Stack", "Bass" }, ampModelDefault));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> ("GATEFLOOR", "Gate Floor", 0.0f, 1.0f, gateFloorDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYSEND", "Delay Send", 0.0f, 1.0f, delaySendDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYTIME", "Delay Time", 0.05f, 1.2f, delayTimeDefault));
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+        params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYTIMERIGHT", "Delay Right Time", 0.05f, 1.2f, delayTimeRightDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYFEEDBACK", "Delay Feedback", 0.0f, 0.92f, delayFeedbackDefault));
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+        params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYFEEDBACKRIGHT", "Delay Right Feedback", 0.0f, 0.92f, delayFeedbackRightDefault));
+    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+    {
+        const auto delayCutoffRange = juce::NormalisableRange<float> (80.0f, 18000.0f, 0.01f, 0.35f);
+        params.push_back (std::make_unique<juce::AudioParameterChoice> ("DELAYFILTERLEFT", "Delay Left Filter", delayDecayFilterChoices(), delayFilterLeftDefault));
+        params.push_back (std::make_unique<juce::AudioParameterChoice> ("DELAYFILTERRIGHT", "Delay Right Filter", delayDecayFilterChoices(), delayFilterRightDefault));
+        params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYCUTOFFLEFT", "Delay Left Cutoff", delayCutoffRange, delayCutoffLeftDefault));
+        params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYCUTOFFRIGHT", "Delay Right Cutoff", delayCutoffRange, delayCutoffRightDefault));
+    }
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("REVERBMIX", "Reverb Mix", 0.0f, 1.0f, reverbMixDefault));
-    if constexpr (buildFlavor() == InstrumentFlavor::advanced)
+    if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
     {
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("REVERBTIME", "Reverb Time", 0.1f, 1.0f, reverbTimeDefault));
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("REVERBDAMP", "Reverb Damping", 0.0f, 1.0f, reverbDampingDefault));
@@ -6903,25 +7435,28 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("HIGHEQFREQ", "High EQ Freq", 1200.0f, 16000.0f, highEqFreqDefault));
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("HIGHEQQ", "High EQ Q", 0.3f, 2.5f, highEqQDefault));
 
-        for (int slotIndex = 0; slotIndex < 6; ++slotIndex)
+        if constexpr (buildFlavor() == InstrumentFlavor::advanced)
         {
-            const auto slotLabel = juce::String ("Matrix ") + juce::String (slotIndex + 1);
-            params.push_back (std::make_unique<juce::AudioParameterChoice> ("MATRIX" + juce::String (slotIndex + 1) + "SOURCE",
-                                                                            slotLabel + " Source",
-                                                                            matrixSourceChoices(),
-                                                                            0));
-            for (int targetIndex = 0; targetIndex < 3; ++targetIndex)
+            for (int slotIndex = 0; slotIndex < 6; ++slotIndex)
             {
-                const auto targetLabel = juce::String (" Target ") + juce::String (targetIndex + 1);
-                params.push_back (std::make_unique<juce::AudioParameterFloat> ("MATRIX" + juce::String (slotIndex + 1) + "AMOUNT" + juce::String (targetIndex + 1),
-                                                                                slotLabel + targetLabel + " Amount",
-                                                                                -1.0f,
-                                                                                1.0f,
-                                                                                0.0f));
-                params.push_back (std::make_unique<juce::AudioParameterChoice> ("MATRIX" + juce::String (slotIndex + 1) + "DEST" + juce::String (targetIndex + 1),
-                                                                                slotLabel + targetLabel + " Destination",
-                                                                                matrixDestinationChoices(),
+                const auto slotLabel = juce::String ("Matrix ") + juce::String (slotIndex + 1);
+                params.push_back (std::make_unique<juce::AudioParameterChoice> ("MATRIX" + juce::String (slotIndex + 1) + "SOURCE",
+                                                                                slotLabel + " Source",
+                                                                                matrixSourceChoices(),
                                                                                 0));
+                for (int targetIndex = 0; targetIndex < 3; ++targetIndex)
+                {
+                    const auto targetLabel = juce::String (" Target ") + juce::String (targetIndex + 1);
+                    params.push_back (std::make_unique<juce::AudioParameterFloat> ("MATRIX" + juce::String (slotIndex + 1) + "AMOUNT" + juce::String (targetIndex + 1),
+                                                                                    slotLabel + targetLabel + " Amount",
+                                                                                    -1.0f,
+                                                                                    1.0f,
+                                                                                    0.0f));
+                    params.push_back (std::make_unique<juce::AudioParameterChoice> ("MATRIX" + juce::String (slotIndex + 1) + "DEST" + juce::String (targetIndex + 1),
+                                                                                    slotLabel + targetLabel + " Destination",
+                                                                                    matrixDestinationChoices(),
+                                                                                    0));
+                }
             }
         }
     }
@@ -7082,273 +7617,6 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("AMPDECAY", 0.14f);
                 setParameterActual ("AMPSUSTAIN", 0.82f);
                 setParameterActual ("AMPRELEASE", 0.1f);
-                break;
-        }
-    }
-    else if constexpr (buildFlavor() == InstrumentFlavor::stringSynth)
-    {
-        auto applyStringSettings = [this] (std::initializer_list<std::pair<const char*, float>> settings)
-        {
-            for (const auto& setting : settings)
-                setParameterActual (setting.first, setting.second);
-        };
-
-        applyStringSettings ({
-            { "POLYPHONY", 16.0f },
-            { "OSCTYPE", 1.0f },
-            { "UNISON", 4.0f },
-            { "DETUNE", 0.035f },
-            { "OSCGATE", 8.0f },
-            { "FILTERTYPE", 0.0f },
-            { "CUTOFF", 3200.0f },
-            { "RESONANCE", 0.12f },
-            { "FILTERENVAMOUNT", 0.08f },
-            { "AMPATTACK", 0.3f },
-            { "AMPDECAY", 0.7f },
-            { "AMPSUSTAIN", 0.88f },
-            { "AMPRELEASE", 1.1f },
-            { "FILTATTACK", 0.12f },
-            { "FILTDECAY", 0.52f },
-            { "FILTSUSTAIN", 0.72f },
-            { "FILTRELEASE", 0.9f },
-            { "FXTYPE", 3.0f },
-            { "FXMIX", 0.16f },
-            { "FXINTENSITY", 0.24f },
-            { "DELAYSEND", 0.08f },
-            { "DELAYTIME", 0.34f },
-            { "DELAYFEEDBACK", 0.22f },
-            { "REVERBMIX", 0.14f },
-        });
-
-        switch (presetIndex)
-        {
-            case 1:
-                applyStringSettings ({
-                    { "OSCTYPE", 2.0f }, { "UNISON", 4.0f }, { "DETUNE", 0.028f }, { "CUTOFF", 2500.0f },
-                    { "AMPATTACK", 0.48f }, { "AMPRELEASE", 1.5f }, { "FXMIX", 0.12f }, { "REVERBMIX", 0.22f },
-                });
-                break;
-            case 2:
-                applyStringSettings ({
-                    { "UNISON", 2.0f }, { "DETUNE", 0.018f }, { "OSCGATE", 2.2f }, { "CUTOFF", 1800.0f },
-                    { "RESONANCE", 0.18f }, { "FILTERENVAMOUNT", 0.24f }, { "AMPATTACK", 0.03f }, { "AMPDECAY", 0.26f },
-                    { "AMPSUSTAIN", 0.66f }, { "AMPRELEASE", 0.28f }, { "FILTATTACK", 0.001f }, { "FILTDECAY", 0.18f },
-                    { "FILTSUSTAIN", 0.16f }, { "FILTRELEASE", 0.1f }, { "FXTYPE", 1.0f }, { "FXMIX", 0.04f },
-                    { "FXINTENSITY", 0.12f }, { "DELAYSEND", 0.02f }, { "REVERBMIX", 0.06f },
-                });
-                break;
-            case 3:
-                applyStringSettings ({
-                    { "OSCTYPE", 2.0f }, { "POLYPHONY", 24.0f }, { "UNISON", 4.0f }, { "DETUNE", 0.034f },
-                    { "CUTOFF", 2200.0f }, { "FILTERENVAMOUNT", 0.12f }, { "AMPATTACK", 0.36f }, { "AMPRELEASE", 1.9f },
-                    { "FXMIX", 0.18f }, { "FXINTENSITY", 0.28f }, { "REVERBMIX", 0.28f },
-                });
-                break;
-            case 4:
-                applyStringSettings ({
-                    { "POLYPHONY", 32.0f }, { "UNISON", 6.0f }, { "DETUNE", 0.06f }, { "CUTOFF", 4000.0f },
-                    { "FILTERENVAMOUNT", 0.18f }, { "AMPATTACK", 1.2f }, { "AMPRELEASE", 2.8f }, { "FXMIX", 0.24f },
-                    { "FXINTENSITY", 0.34f }, { "DELAYSEND", 0.14f }, { "DELAYTIME", 0.46f }, { "DELAYFEEDBACK", 0.32f },
-                    { "REVERBMIX", 0.24f },
-                });
-                break;
-            case 5:
-                applyStringSettings ({
-                    { "UNISON", 4.0f }, { "DETUNE", 0.032f }, { "CUTOFF", 3300.0f }, { "AMPATTACK", 0.22f },
-                    { "AMPDECAY", 0.52f }, { "AMPSUSTAIN", 0.82f }, { "AMPRELEASE", 0.9f }, { "FILTATTACK", 0.08f },
-                    { "FILTDECAY", 0.36f }, { "FILTSUSTAIN", 0.58f }, { "FILTRELEASE", 0.56f }, { "FXMIX", 0.08f },
-                    { "DELAYSEND", 0.04f }, { "REVERBMIX", 0.1f },
-                });
-                break;
-            case 6:
-                applyStringSettings ({
-                    { "UNISON", 6.0f }, { "DETUNE", 0.044f }, { "CUTOFF", 4100.0f }, { "AMPATTACK", 0.18f },
-                    { "AMPRELEASE", 1.2f }, { "FXMIX", 0.24f }, { "FXINTENSITY", 0.36f }, { "DELAYSEND", 0.05f },
-                    { "REVERBMIX", 0.18f },
-                });
-                break;
-            case 7:
-                applyStringSettings ({
-                    { "OSCTYPE", 2.0f }, { "UNISON", 2.0f }, { "DETUNE", 0.015f }, { "OSCGATE", 3.4f }, { "CUTOFF", 2600.0f },
-                    { "RESONANCE", 0.2f }, { "FILTERENVAMOUNT", 0.3f }, { "AMPATTACK", 0.08f }, { "AMPDECAY", 0.25f },
-                    { "AMPSUSTAIN", 0.7f }, { "AMPRELEASE", 0.35f }, { "FILTATTACK", 0.001f }, { "FILTDECAY", 0.22f },
-                    { "FILTSUSTAIN", 0.24f }, { "FILTRELEASE", 0.18f }, { "FXTYPE", 2.0f }, { "FXMIX", 0.14f },
-                    { "FXINTENSITY", 0.22f },
-                });
-                break;
-            case 8:
-                applyStringSettings ({
-                    { "POLYPHONY", 32.0f }, { "UNISON", 5.0f }, { "DETUNE", 0.052f }, { "CUTOFF", 3000.0f },
-                    { "FILTERENVAMOUNT", 0.1f }, { "AMPATTACK", 0.9f }, { "AMPRELEASE", 2.4f }, { "FXMIX", 0.18f },
-                    { "FXINTENSITY", 0.28f }, { "REVERBMIX", 0.24f },
-                });
-                break;
-            case 9:
-                applyStringSettings ({
-                    { "POLYPHONY", 12.0f }, { "UNISON", 2.0f }, { "DETUNE", 0.012f }, { "OSCGATE", 2.0f }, { "CUTOFF", 1400.0f },
-                    { "FILTERENVAMOUNT", 0.18f }, { "AMPATTACK", 0.02f }, { "AMPDECAY", 0.3f }, { "AMPSUSTAIN", 0.52f },
-                    { "AMPRELEASE", 0.38f }, { "FILTATTACK", 0.001f }, { "FILTDECAY", 0.18f }, { "FILTSUSTAIN", 0.18f },
-                    { "FILTRELEASE", 0.18f }, { "FXTYPE", 0.0f }, { "FXMIX", 0.0f }, { "DELAYSEND", 0.0f }, { "REVERBMIX", 0.08f },
-                });
-                break;
-            case 10:
-                applyStringSettings ({
-                    { "POLYPHONY", 24.0f }, { "UNISON", 4.0f }, { "DETUNE", 0.03f }, { "CUTOFF", 3600.0f },
-                    { "FILTERENVAMOUNT", 0.1f }, { "AMPATTACK", 0.24f }, { "AMPRELEASE", 1.2f }, { "FXTYPE", 2.0f },
-                    { "FXMIX", 0.2f }, { "FXINTENSITY", 0.4f }, { "REVERBMIX", 0.18f },
-                });
-                break;
-            case 11:
-                applyStringSettings ({
-                    { "POLYPHONY", 8.0f }, { "UNISON", 3.0f }, { "DETUNE", 0.02f }, { "CUTOFF", 1200.0f },
-                    { "RESONANCE", 0.24f }, { "FILTERENVAMOUNT", 0.06f }, { "AMPATTACK", 0.16f }, { "AMPRELEASE", 1.4f },
-                    { "FXTYPE", 0.0f }, { "FXMIX", 0.0f }, { "DELAYSEND", 0.0f }, { "REVERBMIX", 0.12f },
-                });
-                break;
-            case 12:
-                applyStringSettings ({
-                    { "UNISON", 4.0f }, { "DETUNE", 0.04f }, { "CUTOFF", 5200.0f }, { "FILTERENVAMOUNT", 0.28f },
-                    { "AMPATTACK", 0.35f }, { "AMPRELEASE", 1.6f }, { "FILTATTACK", 0.04f }, { "FILTDECAY", 0.7f },
-                    { "FILTSUSTAIN", 0.48f }, { "FILTRELEASE", 1.1f }, { "FXTYPE", 4.0f }, { "FXMIX", 0.18f },
-                    { "FXINTENSITY", 0.26f }, { "DELAYSEND", 0.08f }, { "REVERBMIX", 0.16f },
-                });
-                break;
-            case 13:
-                applyStringSettings ({
-                    { "POLYPHONY", 32.0f }, { "UNISON", 6.0f }, { "DETUNE", 0.065f }, { "CUTOFF", 4600.0f },
-                    { "AMPATTACK", 1.4f }, { "AMPRELEASE", 3.0f }, { "FXMIX", 0.28f }, { "FXINTENSITY", 0.36f },
-                    { "DELAYSEND", 0.18f }, { "DELAYTIME", 0.52f }, { "DELAYFEEDBACK", 0.4f }, { "REVERBMIX", 0.3f },
-                });
-                break;
-            case 14:
-                applyStringSettings ({
-                    { "POLYPHONY", 48.0f }, { "UNISON", 8.0f }, { "DETUNE", 0.08f }, { "CUTOFF", 3400.0f },
-                    { "FILTERENVAMOUNT", 0.14f }, { "AMPATTACK", 0.8f }, { "AMPRELEASE", 2.5f }, { "FXMIX", 0.2f },
-                    { "DELAYSEND", 0.1f }, { "REVERBMIX", 0.24f },
-                });
-                break;
-            case 15:
-                applyStringSettings ({
-                    { "POLYPHONY", 4.0f }, { "UNISON", 2.0f }, { "DETUNE", 0.01f }, { "OSCGATE", 2.8f }, { "CUTOFF", 2100.0f },
-                    { "RESONANCE", 0.22f }, { "FILTERENVAMOUNT", 0.32f }, { "AMPATTACK", 0.01f }, { "AMPDECAY", 0.18f },
-                    { "AMPSUSTAIN", 0.78f }, { "AMPRELEASE", 0.2f }, { "FILTATTACK", 0.001f }, { "FILTDECAY", 0.18f },
-                    { "FILTSUSTAIN", 0.2f }, { "FILTRELEASE", 0.1f }, { "FXTYPE", 1.0f }, { "FXMIX", 0.08f },
-                    { "FXINTENSITY", 0.18f }, { "DELAYSEND", 0.02f }, { "REVERBMIX", 0.04f },
-                });
-                break;
-            case 16:
-                applyStringSettings ({
-                    { "UNISON", 4.0f }, { "DETUNE", 0.045f }, { "CUTOFF", 1800.0f }, { "RESONANCE", 0.2f },
-                    { "FILTERENVAMOUNT", 0.4f }, { "AMPATTACK", 0.12f }, { "AMPRELEASE", 1.8f }, { "FILTATTACK", 0.3f },
-                    { "FILTDECAY", 1.6f }, { "FILTSUSTAIN", 0.12f }, { "FILTRELEASE", 1.2f }, { "FXTYPE", 2.0f },
-                    { "FXMIX", 0.16f }, { "FXINTENSITY", 0.42f }, { "DELAYSEND", 0.1f }, { "REVERBMIX", 0.16f },
-                });
-                break;
-            case 17:
-                applyStringSettings ({
-                    { "POLYPHONY", 24.0f }, { "UNISON", 5.0f }, { "DETUNE", 0.05f }, { "CUTOFF", 2400.0f },
-                    { "FILTERENVAMOUNT", 0.14f }, { "AMPATTACK", 0.55f }, { "AMPRELEASE", 2.2f }, { "FXMIX", 0.2f },
-                    { "FXINTENSITY", 0.3f }, { "DELAYSEND", 0.12f }, { "REVERBMIX", 0.34f },
-                });
-                break;
-            case 18:
-                applyStringSettings ({
-                    { "POLYPHONY", 12.0f }, { "UNISON", 4.0f }, { "DETUNE", 0.022f }, { "CUTOFF", 900.0f },
-                    { "RESONANCE", 0.3f }, { "FILTERENVAMOUNT", 0.05f }, { "AMPATTACK", 0.4f }, { "AMPDECAY", 0.8f },
-                    { "AMPSUSTAIN", 0.7f }, { "AMPRELEASE", 1.5f }, { "FILTATTACK", 0.6f }, { "FILTDECAY", 1.8f },
-                    { "FILTSUSTAIN", 0.4f }, { "FILTRELEASE", 1.4f }, { "FXTYPE", 4.0f }, { "FXMIX", 0.12f },
-                    { "FXINTENSITY", 0.18f }, { "REVERBMIX", 0.26f },
-                });
-                break;
-            case 19:
-                applyStringSettings ({
-                    { "UNISON", 4.0f }, { "DETUNE", 0.035f }, { "OSCGATE", 1.6f }, { "CUTOFF", 2000.0f },
-                    { "FILTERENVAMOUNT", 0.36f }, { "AMPATTACK", 0.01f }, { "AMPDECAY", 0.22f }, { "AMPSUSTAIN", 0.46f },
-                    { "AMPRELEASE", 0.18f }, { "FILTATTACK", 0.001f }, { "FILTDECAY", 0.16f }, { "FILTSUSTAIN", 0.14f },
-                    { "FILTRELEASE", 0.14f }, { "FXMIX", 0.1f }, { "DELAYSEND", 0.06f }, { "REVERBMIX", 0.08f },
-                });
-                break;
-            case 20:
-                applyStringSettings ({
-                    { "POLYPHONY", 32.0f }, { "UNISON", 8.0f }, { "DETUNE", 0.095f }, { "CUTOFF", 2800.0f },
-                    { "AMPATTACK", 0.7f }, { "AMPRELEASE", 2.7f }, { "FXMIX", 0.3f }, { "FXINTENSITY", 0.42f },
-                    { "DELAYSEND", 0.12f }, { "DELAYTIME", 0.38f }, { "DELAYFEEDBACK", 0.28f }, { "REVERBMIX", 0.25f },
-                });
-                break;
-            case 21:
-                applyStringSettings ({
-                    { "UNISON", 3.0f }, { "DETUNE", 0.026f }, { "OSCGATE", 3.2f }, { "CUTOFF", 3100.0f },
-                    { "FILTERENVAMOUNT", 0.22f }, { "AMPATTACK", 0.09f }, { "AMPDECAY", 0.42f }, { "AMPSUSTAIN", 0.74f },
-                    { "AMPRELEASE", 0.52f }, { "FXTYPE", 2.0f }, { "FXMIX", 0.22f }, { "FXINTENSITY", 0.28f },
-                    { "DELAYSEND", 0.08f }, { "REVERBMIX", 0.12f },
-                });
-                break;
-            case 22:
-                applyStringSettings ({
-                    { "POLYPHONY", 24.0f }, { "UNISON", 5.0f }, { "DETUNE", 0.048f }, { "CUTOFF", 3600.0f },
-                    { "FILTERENVAMOUNT", 0.18f }, { "AMPATTACK", 0.95f }, { "AMPRELEASE", 2.3f }, { "FXMIX", 0.18f },
-                    { "DELAYSEND", 0.15f }, { "DELAYTIME", 0.58f }, { "DELAYFEEDBACK", 0.36f }, { "REVERBMIX", 0.22f },
-                });
-                break;
-            case 23:
-                applyStringSettings ({
-                    { "POLYPHONY", 8.0f }, { "UNISON", 2.0f }, { "DETUNE", 0.018f }, { "OSCGATE", 2.4f }, { "CUTOFF", 1700.0f },
-                    { "RESONANCE", 0.19f }, { "FILTERENVAMOUNT", 0.3f }, { "AMPATTACK", 0.025f }, { "AMPDECAY", 0.22f },
-                    { "AMPSUSTAIN", 0.72f }, { "AMPRELEASE", 0.26f }, { "FILTATTACK", 0.001f }, { "FILTDECAY", 0.24f },
-                    { "FILTSUSTAIN", 0.24f }, { "FILTRELEASE", 0.12f }, { "FXTYPE", 1.0f }, { "FXMIX", 0.05f },
-                    { "FXINTENSITY", 0.12f }, { "REVERBMIX", 0.06f },
-                });
-                break;
-            case 24:
-                applyStringSettings ({
-                    { "POLYPHONY", 32.0f }, { "UNISON", 6.0f }, { "DETUNE", 0.058f }, { "CUTOFF", 2900.0f },
-                    { "FILTERENVAMOUNT", 0.16f }, { "AMPATTACK", 0.62f }, { "AMPRELEASE", 2.6f }, { "FXTYPE", 4.0f },
-                    { "FXMIX", 0.16f }, { "FXINTENSITY", 0.32f }, { "DELAYSEND", 0.16f }, { "DELAYTIME", 0.48f },
-                    { "DELAYFEEDBACK", 0.34f }, { "REVERBMIX", 0.32f },
-                });
-                break;
-            case 25:
-                applyStringSettings ({
-                    { "UNISON", 4.0f }, { "DETUNE", 0.03f }, { "CUTOFF", 4800.0f }, { "RESONANCE", 0.14f },
-                    { "FILTERENVAMOUNT", 0.2f }, { "AMPATTACK", 0.12f }, { "AMPDECAY", 0.45f }, { "AMPSUSTAIN", 0.82f },
-                    { "AMPRELEASE", 0.9f }, { "FXTYPE", 2.0f }, { "FXMIX", 0.14f }, { "FXINTENSITY", 0.35f },
-                    { "DELAYSEND", 0.1f }, { "REVERBMIX", 0.14f },
-                });
-                break;
-            case 26:
-                applyStringSettings ({
-                    { "POLYPHONY", 1.0f }, { "OSCTYPE", 2.0f }, { "UNISON", 1.0f }, { "DETUNE", 0.0f }, { "OSCGATE", 4.0f },
-                    { "CUTOFF", 950.0f }, { "RESONANCE", 0.24f }, { "FILTERENVAMOUNT", 0.18f }, { "AMPATTACK", 0.07f },
-                    { "AMPDECAY", 0.32f }, { "AMPSUSTAIN", 0.82f }, { "AMPRELEASE", 0.6f }, { "FILTATTACK", 0.03f },
-                    { "FILTDECAY", 0.5f }, { "FILTSUSTAIN", 0.4f }, { "FILTRELEASE", 0.6f }, { "FXTYPE", 0.0f },
-                    { "FXMIX", 0.0f }, { "DELAYSEND", 0.0f }, { "REVERBMIX", 0.1f },
-                });
-                break;
-            case 27:
-                applyStringSettings ({
-                    { "POLYPHONY", 20.0f }, { "UNISON", 4.0f }, { "DETUNE", 0.024f }, { "CUTOFF", 2300.0f },
-                    { "FILTERENVAMOUNT", 0.26f }, { "AMPATTACK", 0.4f }, { "AMPDECAY", 0.9f }, { "AMPSUSTAIN", 0.76f },
-                    { "AMPRELEASE", 1.7f }, { "FILTATTACK", 0.18f }, { "FILTDECAY", 1.4f }, { "FILTSUSTAIN", 0.22f },
-                    { "FILTRELEASE", 1.6f }, { "FXMIX", 0.12f }, { "DELAYSEND", 0.14f }, { "REVERBMIX", 0.28f },
-                });
-                break;
-            case 28:
-                applyStringSettings ({
-                    { "POLYPHONY", 48.0f }, { "UNISON", 6.0f }, { "DETUNE", 0.07f }, { "CUTOFF", 2600.0f },
-                    { "FILTERENVAMOUNT", 0.12f }, { "AMPATTACK", 1.6f }, { "AMPRELEASE", 3.6f }, { "FXMIX", 0.24f },
-                    { "FXINTENSITY", 0.2f }, { "DELAYSEND", 0.22f }, { "DELAYTIME", 0.72f }, { "DELAYFEEDBACK", 0.44f },
-                    { "REVERBMIX", 0.38f },
-                });
-                break;
-            case 29:
-                applyStringSettings ({
-                    { "POLYPHONY", 24.0f }, { "UNISON", 5.0f }, { "DETUNE", 0.055f }, { "CUTOFF", 3400.0f },
-                    { "FILTERENVAMOUNT", 0.2f }, { "AMPATTACK", 0.52f }, { "AMPRELEASE", 2.0f }, { "FXTYPE", 2.0f },
-                    { "FXMIX", 0.12f }, { "FXINTENSITY", 0.46f }, { "DELAYSEND", 0.12f }, { "DELAYTIME", 0.42f },
-                    { "DELAYFEEDBACK", 0.3f }, { "REVERBMIX", 0.2f },
-                });
-                break;
-            default:
                 break;
         }
     }
@@ -7772,40 +8040,6 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("CUTOFF", 7600.0f);
                 setParameterActual ("FXMIX", 0.12f);
                 setParameterActual ("REVERBMIX", 0.14f);
-                break;
-        }
-    }
-    else if constexpr (buildFlavor() == InstrumentFlavor::acid303)
-    {
-        switch (presetIndex)
-        {
-            case 1:
-                setParameterActual ("OSCTYPE", 2.0f);
-                setParameterActual ("CUTOFF", 620.0f);
-                setParameterActual ("RESONANCE", 0.74f);
-                setParameterActual ("FILTERENVAMOUNT", 0.88f);
-                setParameterActual ("FMAMOUNT", 360.0f);
-                break;
-            case 2:
-                setParameterActual ("OSCTYPE", 1.0f);
-                setParameterActual ("CUTOFF", 420.0f);
-                setParameterActual ("RESONANCE", 0.58f);
-                setParameterActual ("FILTERENVAMOUNT", 0.62f);
-                setParameterActual ("FMAMOUNT", 180.0f);
-                break;
-            case 3:
-                setParameterActual ("OSCTYPE", 1.0f);
-                setParameterActual ("CUTOFF", 820.0f);
-                setParameterActual ("RESONANCE", 0.92f);
-                setParameterActual ("FILTERENVAMOUNT", 1.0f);
-                setParameterActual ("FMAMOUNT", 520.0f);
-                break;
-            default:
-                setParameterActual ("OSCTYPE", 1.0f);
-                setParameterActual ("CUTOFF", 540.0f);
-                setParameterActual ("RESONANCE", 0.82f);
-                setParameterActual ("FILTERENVAMOUNT", 0.94f);
-                setParameterActual ("FMAMOUNT", 460.0f);
                 break;
         }
     }
@@ -8489,56 +8723,6 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("OSCGATE", 0.42f);
                 setParameterActual ("CUTOFF", 14000.0f);
                 setParameterActual ("FILTERENVAMOUNT", 0.12f);
-                break;
-        }
-    }
-    else if constexpr (buildFlavor() == InstrumentFlavor::drum808)
-    {
-        setParameterActual ("DRUMMASTERLEVEL", 1.0f);
-        setParameterActual ("DRUM_KICK_ATTACK", 0.34f);
-        setParameterActual ("DRUM_SNARE_TONE", 0.48f);
-        setParameterActual ("DRUM_SNARE_SNAPPY", 0.54f);
-
-        for (size_t index = 0; index < drumVoiceTuneParamIds.size(); ++index)
-            setParameterActual (drumVoiceTuneParamIds[index], drum808VoiceTuneDefaults[index]);
-
-        for (size_t index = 0; index < drumVoiceDecayParamIds.size(); ++index)
-            setParameterActual (drumVoiceDecayParamIds[index], drum808VoiceDecayDefaults[index]);
-
-        for (size_t index = 0; index < drumVoiceLevelParamIds.size(); ++index)
-            setParameterActual (drumVoiceLevelParamIds[index], drum808VoiceLevelDefaults[index]);
-
-        switch (presetIndex)
-        {
-            case 1:
-                setParameterActual ("DETUNE", -1.5f);
-                setParameterActual ("SYNC", 0.06f);
-                setParameterActual ("FMAMOUNT", 70.0f);
-                setParameterActual ("OSCGATE", 1.35f);
-                setParameterActual ("CUTOFF", 8400.0f);
-                setParameterActual ("FILTERENVAMOUNT", 0.04f);
-                setParameterActual ("DRUMDECAY_KICK", 0.82f);
-                setParameterActual ("DRUMDECAY_OPEN_HAT", 0.86f);
-                setParameterActual ("DRUM_KICK_ATTACK", 0.26f);
-                break;
-            case 2:
-                setParameterActual ("DETUNE", 0.8f);
-                setParameterActual ("SYNC", 0.12f);
-                setParameterActual ("FMAMOUNT", 120.0f);
-                setParameterActual ("OSCGATE", 0.75f);
-                setParameterActual ("CUTOFF", 11200.0f);
-                setParameterActual ("FILTERENVAMOUNT", 0.08f);
-                setParameterActual ("DRUM_SNARE_TONE", 0.58f);
-                setParameterActual ("DRUM_SNARE_SNAPPY", 0.66f);
-                setParameterActual ("DRUMTUNE_CRASH", 1.5f);
-                break;
-            default:
-                setParameterActual ("DETUNE", 0.0f);
-                setParameterActual ("SYNC", 0.08f);
-                setParameterActual ("FMAMOUNT", 90.0f);
-                setParameterActual ("OSCGATE", 0.95f);
-                setParameterActual ("CUTOFF", 9200.0f);
-                setParameterActual ("FILTERENVAMOUNT", 0.05f);
                 break;
         }
     }

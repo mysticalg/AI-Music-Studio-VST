@@ -269,6 +269,7 @@ private:
     LedToggleButton* addVirusPanelButton (const juce::String& key, const juce::String& text, const juce::String& tooltip, bool latching = true);
     [[nodiscard]] LedToggleButton* findVirusPanelButton (const juce::String& key) const;
     void buildEditor();
+    void paintNativeFxVisualizer (juce::Graphics&) const;
 
     AdvancedVSTiAudioProcessor& audioProcessor;
     Theme theme;
@@ -282,6 +283,7 @@ private:
     juce::OwnedArray<ChoiceCard> choiceCards;
     juce::OwnedArray<DrumPad> drumPads;
     juce::OwnedArray<LedToggleButton> virusPanelButtons;
+    juce::Rectangle<int> nativeFxVisualizerBounds;
     std::vector<juce::String> virusPanelButtonKeys;
     std::unique_ptr<LedToggleButton> standaloneKeyboardToggle;
     std::unique_ptr<juce::MidiKeyboardComponent> standaloneKeyboard;

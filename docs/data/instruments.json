@@ -26,19 +26,6 @@
     }
   },
   {
-    "slug": "ai-808-machine",
-    "targetName": "AI808Machine",
-    "productName": "AI 808 Machine",
-    "family": "Drum Machine",
-    "summary": "Analogue-inspired 808 groove box with long subs, tuned percussion, and classic machine snap.",
-    "tags": ["808 flavor", "long subs", "groove ready"],
-    "screenshot": "./screenshots/ai-808-machine.png",
-    "releaseAssets": {
-      "vst3": "ai-808-machine-vst3.zip",
-      "standalone": "ai-808-machine-standalone.zip"
-    }
-  },
-  {
     "slug": "ai-bass-synth",
     "targetName": "AIBassSynth",
     "productName": "AI Bass Synth",
@@ -49,32 +36,6 @@
     "releaseAssets": {
       "vst3": "ai-bass-synth-vst3.zip",
       "standalone": "ai-bass-synth-standalone.zip"
-    }
-  },
-  {
-    "slug": "ai-tb303",
-    "targetName": "AITB303",
-    "productName": "AI TB303",
-    "family": "Acid Bass",
-    "summary": "Acid line instrument with resonant squelch, glide, and pattern-ready mono behavior.",
-    "tags": ["acid lines", "resonant filters", "glide"],
-    "screenshot": "./screenshots/ai-tb303.png",
-    "releaseAssets": {
-      "vst3": "ai-tb303-vst3.zip",
-      "standalone": "ai-tb303-standalone.zip"
-    }
-  },
-  {
-    "slug": "ai-string-synth",
-    "targetName": "AIStringSynth",
-    "productName": "AI String Synth",
-    "family": "Ensemble Synth",
-    "summary": "Wide ensemble synth focused on lush stacked strings and cinematic motion.",
-    "tags": ["ensemble layers", "wide stereo", "cinematic pads"],
-    "screenshot": "./screenshots/ai-string-synth.png",
-    "releaseAssets": {
-      "vst3": "ai-string-synth-vst3.zip",
-      "standalone": "ai-string-synth-standalone.zip"
     }
   },
   {
