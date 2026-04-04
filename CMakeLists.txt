@@ -227,7 +227,7 @@ function(add_ai_music_screenshot_exporter target_name product_name flavor_code)
 endfunction()
 
 add_ai_music_vst3(VirusSynth "Virus Synth" AdvS 0 com.aimusicstudio.virussynth)
-add_ai_music_vst3(AIDrumMachine "AI Drum Machine" ADrm 1 com.aimusicstudio.aidrummachine)
+add_ai_music_vst3(AIDrumMachine "AI 909 Drum Machine" ADrm 1 com.aimusicstudio.aidrummachine)
 add_ai_music_vst3(AIBassSynth "AI Bass Synth" ABas 2 com.aimusicstudio.aibasssynth)
 add_ai_music_vst3(AILeadSynth "AI Lead Synth" ALed 4 com.aimusicstudio.aileadsynth)
 add_ai_music_vst3(AIPadSynth "AI Pad Synth" APad 5 com.aimusicstudio.aipadsynth)
@@ -257,7 +257,7 @@ add_ai_music_fx_vst3(AIParametricEQ "AI Parametric EQ" APEq 112 com.aimusicstudi
 
 if(AIMS_BUILD_SCREENSHOT_EXPORTERS)
   add_ai_music_screenshot_exporter(VirusSynth "Virus Synth" 0)
-  add_ai_music_screenshot_exporter(AIDrumMachine "AI Drum Machine" 1)
+  add_ai_music_screenshot_exporter(AIDrumMachine "AI 909 Drum Machine" 1)
   add_ai_music_screenshot_exporter(AIBassSynth "AI Bass Synth" 2)
   add_ai_music_screenshot_exporter(AILeadSynth "AI Lead Synth" 4)
   add_ai_music_screenshot_exporter(AIPadSynth "AI Pad Synth" 5)

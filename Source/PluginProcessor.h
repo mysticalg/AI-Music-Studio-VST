@@ -80,6 +80,7 @@ public:
     [[nodiscard]] bool isNativeFxFlavor() const noexcept;
     [[nodiscard]] static constexpr int eqAnalyzerBinCount() noexcept { return eqAnalyzerBinCountValue; }
     [[nodiscard]] float getEqAnalyzerMagnitudeDb (bool postEq, int binIndex) const noexcept;
+    [[nodiscard]] float getOutputMeterLevel() const noexcept;
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -199,6 +200,7 @@ private:
     struct ExternalSampleData;
     struct PianoSampleLibrary;
     struct AcousticSampleLibrary;
+    struct TR909SampleLibrary;
 
     static constexpr int maxVoices = 256;
     static constexpr int maxUnisonOscillators = 8;
@@ -230,6 +232,8 @@ private:
         int externalSampleLoopStart = 0;
         int externalSampleLoopEnd = 0;
         bool externalSampleLoopEnabled = false;
+        int forcedFadeSamplesRemaining = 0;
+        int forcedFadeSamplesTotal = 0;
         std::shared_ptr<const ExternalSampleData> externalSample;
         std::array<float, maxUnisonOscillators> unisonPhases {};
         std::array<float, maxUnisonOscillators> unisonSyncPhases {};
@@ -337,6 +341,7 @@ private:
         float resonance2 = 0.4f;
         float filterEnvAmount = 0.5f;
         float filterBalance = 0.0f;
+        float sourceBlend = 1.0f;
         float panorama = 0.0f;
         float keyFollow = 0.0f;
         float lfo1Rate = 2.0f;
@@ -413,6 +418,7 @@ private:
         float highEqFreq = 5000.0f;
         float highEqQ = 0.8f;
         int saturationType = 0;
+        int presetIndex = 0;
         std::array<ModMatrixSlot, 6> modulationMatrix {};
         float drumMasterLevel = 1.0f;
         float drumKickAttack = 0.5f;
@@ -483,6 +489,25 @@ private:
         juce::String presetName;
     };
 
+    struct TR909SampleLibrary
+    {
+        struct Variant
+        {
+            std::shared_ptr<const ExternalSampleData> sample;
+            int accent = -1;
+            int tune = -1;
+            int attack = -1;
+            int decay = -1;
+            int tone = -1;
+            int snappy = -1;
+            int shot = -1;
+        };
+
+        bool available = false;
+        juce::String sourcePath;
+        std::array<std::vector<Variant>, drumVoiceLevelCount> variants {};
+    };
+
     struct EqSettingsSnapshot
     {
         bool valid = false;
@@ -528,7 +553,10 @@ private:
     std::array<std::shared_ptr<const ExternalSampleData>, vecPadCount> externalPadSamples {};
     std::shared_ptr<const PianoSampleLibrary> pianoSampleLibrary;
     std::shared_ptr<const AcousticSampleLibrary> acousticSampleLibrary;
+    std::shared_ptr<const TR909SampleLibrary> tr909SampleLibrary;
+    std::map<int, std::shared_ptr<const AcousticSampleLibrary>> acousticSampleLibrariesByBank;
     int loadedAcousticSampleBank = -1;
+    bool acousticSampleBanksPreloaded = false;
     std::array<int, vecPadCount> loadedExternalPadIndices = []
     {
         std::array<int, vecPadCount> values {};
@@ -595,6 +623,7 @@ private:
     std::array<std::atomic<float>, eqAnalyzerBinCountValue> eqAnalyzerOutputMagnitudes {};
     int eqAnalyzerInputFifoIndex = 0;
     int eqAnalyzerOutputFifoIndex = 0;
+    std::atomic<float> outputMeterLevel { 0.0f };
 
     float lfo1Phase = 0.0f;
     float lfo2Phase = 0.0f;
@@ -608,9 +637,11 @@ private:
     bool arpSwingPhase = false;
     bool arpWasEnabled = false;
     juce::Array<int> heldNotes;
+    std::array<float, 128> heldNoteVelocities {};
     juce::MidiKeyboardState keyboardState;
     std::atomic<int> pendingPresetIndex { -1 };
     std::atomic<bool> pendingExternalPadReload { false };
+    std::atomic<bool> pendingSampleBankRefresh { false };
     std::atomic<bool> arpHoldEnabled { false };
     std::atomic<bool> pendingReleaseHeldNotes { false };
     std::atomic<bool> pendingPanicAllNotes { false };
@@ -621,6 +652,7 @@ private:
     bool suppressPresetCallback = false;
     int activeAuditionNote = -1;
     int auditionSamplesRemaining = 0;
+    int acousticRoundRobinCounter = 0;
     juce::SpinLock pendingPreviewMidiLock;
     juce::MidiBuffer pendingPreviewMidi;
 
@@ -724,6 +756,11 @@ private:
                || buildFlavor() == InstrumentFlavor::organ;
     }
 
+    [[nodiscard]] static constexpr bool supportsSourceBlend() noexcept
+    {
+        return isAcousticFlavor();
+    }
+
     [[nodiscard]] static constexpr bool supportsOffFilterChoice() noexcept
     {
         return isDrumFlavor() || isAcousticFlavor();
@@ -756,15 +793,15 @@ private:
         else if constexpr (buildFlavor() == InstrumentFlavor::piano)
             return 16;
         else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
-            return 8;
+            return 12;
         else if constexpr (buildFlavor() == InstrumentFlavor::violin)
             return 8;
         else if constexpr (buildFlavor() == InstrumentFlavor::flute)
-            return 1;
+            return 4;
         else if constexpr (buildFlavor() == InstrumentFlavor::saxophone)
-            return 1;
+            return 4;
         else if constexpr (buildFlavor() == InstrumentFlavor::bassGuitar)
-            return 1;
+            return 4;
         else if constexpr (buildFlavor() == InstrumentFlavor::organ)
             return 16;
         else if constexpr (buildFlavor() == InstrumentFlavor::advanced)
@@ -816,9 +853,12 @@ private:
     void initializeExternalPadLibrary();
     void initializePianoSampleLibrary();
     void initializeAcousticSampleLibrary (int bankIndex);
+    void preloadAcousticSampleBanks();
+    void initializeTr909SampleLibrary();
     void refreshExternalPadSamples();
     void assignPianoSampleToVoice (VoiceState& voice, int midiNote, float velocity);
     void assignAcousticSampleToVoice (VoiceState& voice, int midiNote, float velocity);
+    void assignTr909SampleToVoice (VoiceState& voice, int midiNote, float velocity);
     void loadExternalPadSample (int padIndex);
     [[nodiscard]] std::shared_ptr<const ExternalSampleData> loadExternalSampleData (const juce::File& sourceFile,
                                                                                     const juce::String& displayName,
@@ -835,6 +875,7 @@ private:
     void refreshParametricEqFiltersIfNeeded();
     void processNativeEffectBlock (juce::AudioBuffer<float>& buffer);
     void updateEqAnalyzer (const juce::AudioBuffer<float>& buffer, bool postEq);
+    void updateOutputMeterLevel (const juce::AudioBuffer<float>& buffer) noexcept;
     void performEqAnalyzerTransform (std::array<float, eqAnalyzerFftSize>& fifo,
                                      int& fifoIndex,
                                      std::array<float, eqAnalyzerFftSize * 2>& fftData,
@@ -856,6 +897,7 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     void handleAsyncUpdate() override;
     float renderInstrumentMultisampleVoice (VoiceState& voice, float soundingMidiNote);
+    float renderTr909VoiceSample (VoiceState& voice);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AdvancedVSTiAudioProcessor)
 };

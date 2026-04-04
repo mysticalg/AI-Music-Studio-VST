@@ -325,19 +325,7 @@ int fixedInstrumentKnobColumns (int knobCount, bool forceSingleRow = false)
     if (forceSingleRow)
         return knobCount;
 
-    if (knobCount >= 30)
-        return 6;
-
-    if (knobCount == 6)
-        return 3;
-
-    if (knobCount <= 5)
-        return knobCount;
-
-    if (knobCount <= 8)
-        return 4;
-
-    return 5;
+    return juce::jmin (8, knobCount);
 }
 
 const std::array<juce::String, 5> kVirusModLeftTargetLabels { "OSC 1", "OSC 2/3", "PW", "RESO", "FLT GAIN" };
@@ -1137,6 +1125,26 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::setScale (float scaleFactor)
     resized();
 }
 
+void AdvancedVSTiAudioProcessorEditor::KnobCard::setMeterEnabled (bool shouldEnable)
+{
+    if (meterEnabled == shouldEnable)
+        return;
+
+    meterEnabled = shouldEnable;
+    resized();
+    repaint();
+}
+
+void AdvancedVSTiAudioProcessorEditor::KnobCard::setMeterLevel (float newLevel)
+{
+    const auto clamped = juce::jlimit (0.0f, 2.0f, newLevel);
+    if (std::abs (meterLevel - clamped) < 0.0025f)
+        return;
+
+    meterLevel = clamped;
+    repaint();
+}
+
 void AdvancedVSTiAudioProcessorEditor::KnobCard::updateMetrics()
 {
     const auto& skin = lookAndFeel.theme;
@@ -1190,6 +1198,45 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::paint (juce::Graphics& g)
     const bool useFixedInstrumentLayout = ! lookAndFeel.theme.tribute303
                                           && ! lookAndFeel.theme.tributeVirus
                                           && ! lookAndFeel.theme.vecPadMachine;
+    auto paintMeter = [&]
+    {
+        if (! meterEnabled)
+            return;
+
+        const auto meterGap = scaledFloat ((lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout) ? 6.0f : 4.0f, scale);
+        const auto meterWidth = scaledFloat ((lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout) ? 8.0f : 6.0f, scale);
+        auto meterBounds = slider.getBounds().toFloat();
+        meterBounds.setX (slider.getRight() + meterGap);
+        meterBounds.setWidth (meterWidth);
+        meterBounds = meterBounds.reduced (0.0f, scaledFloat ((lookAndFeel.theme.tribute909 && compact) ? 8.0f : 10.0f, scale));
+        meterBounds = meterBounds.withTrimmedBottom (scaledFloat ((lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout) ? 8.0f : 4.0f, scale));
+
+        if (meterBounds.getHeight() < scaledFloat (16.0f, scale))
+            return;
+
+        const auto meterRadius = scaledFloat (3.0f, scale);
+        g.setColour (lookAndFeel.theme.panelEdge.withAlpha (0.65f));
+        g.fillRoundedRectangle (meterBounds, meterRadius);
+
+        auto slot = meterBounds.reduced (scaledFloat (1.0f, scale));
+        g.setColour (juce::Colours::black.withAlpha (0.22f));
+        g.fillRoundedRectangle (slot, juce::jmax (1.0f, meterRadius - scaledFloat (1.0f, scale)));
+
+        const auto meterDb = juce::Decibels::gainToDecibels (juce::jmax (meterLevel, 0.0001f), -60.0f);
+        const auto meterNorm = juce::jlimit (0.0f, 1.0f, juce::jmap (meterDb, -60.0f, 6.0f, 0.0f, 1.0f));
+        if (meterNorm > 0.0f)
+        {
+            auto fill = slot.withTop (slot.getBottom() - slot.getHeight() * meterNorm);
+            juce::ColourGradient gradient (lookAndFeel.theme.accent, fill.getBottomLeft(),
+                                           lookAndFeel.theme.accentGlow.brighter (0.1f), fill.getTopRight(), false);
+            g.setGradientFill (gradient);
+            g.fillRoundedRectangle (fill, juce::jmax (1.0f, meterRadius - scaledFloat (1.2f, scale)));
+        }
+
+        g.setColour (juce::Colours::white.withAlpha (0.16f));
+        g.drawRoundedRectangle (meterBounds, meterRadius, juce::jmax (1.0f, scaledFloat (1.0f, scale)));
+    };
+
     if (lookAndFeel.theme.tribute303)
     {
         const auto radius = scaledFloat (12.0f, scale);
@@ -1199,16 +1246,23 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::paint (juce::Graphics& g)
         g.drawRoundedRectangle (area, radius, juce::jmax (1.0f, scaledFloat (1.1f, scale)));
         g.setColour (lookAndFeel.theme.accent.withAlpha (0.18f));
         g.fillRoundedRectangle (area.removeFromBottom (scaledFloat (3.0f, scale)), scaledFloat (1.5f, scale));
+        paintMeter();
         return;
     }
 
     if (lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout)
+    {
+        paintMeter();
         return;
+    }
 
     if (lookAndFeel.theme.tribute909)
     {
         if (compact)
+        {
+            paintMeter();
             return;
+        }
 
         const auto radius = scaledFloat (8.0f, scale);
         g.setColour (lookAndFeel.theme.faceplate.withAlpha (0.98f));
@@ -1221,6 +1275,7 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::paint (juce::Graphics& g)
         g.fillRoundedRectangle (header, scaledFloat (6.0f, scale));
         g.setColour (lookAndFeel.theme.accent.withAlpha (0.9f));
         g.fillRect (header.removeFromBottom (scaledFloat (2.0f, scale)));
+        paintMeter();
         return;
     }
 
@@ -1228,6 +1283,7 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::paint (juce::Graphics& g)
     g.fillRoundedRectangle (area, scaledFloat (18.0f, scale));
     g.setColour (lookAndFeel.theme.panelEdge);
     g.drawRoundedRectangle (area, scaledFloat (18.0f, scale), juce::jmax (1.0f, scaledFloat (1.2f, scale)));
+    paintMeter();
 }
 
 void AdvancedVSTiAudioProcessorEditor::KnobCard::resized()
@@ -1235,6 +1291,14 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::resized()
     const bool useFixedInstrumentLayout = ! lookAndFeel.theme.tribute303
                                           && ! lookAndFeel.theme.tributeVirus
                                           && ! lookAndFeel.theme.vecPadMachine;
+    const auto meterReserve = meterEnabled
+                                  ? scaledInt ((lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout) ? 16.0f : 12.0f, scale)
+                                  : 0;
+
+    auto trimForMeter = [meterReserve] (juce::Rectangle<int> bounds)
+    {
+        return meterReserve > 0 ? bounds.withTrimmedRight (meterReserve) : bounds;
+    };
 
     if (lookAndFeel.theme.tributeVirus || useFixedInstrumentLayout)
     {
@@ -1247,7 +1311,7 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::resized()
             toggleButton->setBounds (area.getRight() - toggleSize, area.getY(), toggleSize, toggleSize);
         }
         const auto bottomTrim = lookAndFeel.theme.tribute909 ? kFixedDrumSliderBottomTrim : kVirusSliderBottomTrim;
-        slider.setBounds (area.withTrimmedBottom (scaledInt (static_cast<float> (bottomTrim), scale)));
+        slider.setBounds (trimForMeter (area.withTrimmedBottom (scaledInt (static_cast<float> (bottomTrim), scale))));
         return;
     }
 
@@ -1258,13 +1322,13 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::resized()
             titleLabel.setBounds ({});
             hintLabel.setBounds ({});
             slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-            slider.setBounds (getLocalBounds());
+            slider.setBounds (trimForMeter (getLocalBounds()));
             return;
         }
         auto area = getLocalBounds().reduced (scaledInt (8.0f, scale));
         titleLabel.setBounds (area.removeFromTop (scaledInt (18.0f, scale)));
-        slider.setBounds (area.removeFromTop (juce::jmin (scaledInt (78.0f, scale),
-                                                          juce::jmax (scaledInt (60.0f, scale), area.getHeight() - scaledInt (30.0f, scale)))));
+        slider.setBounds (trimForMeter (area.removeFromTop (juce::jmin (scaledInt (78.0f, scale),
+                                                                        juce::jmax (scaledInt (60.0f, scale), area.getHeight() - scaledInt (30.0f, scale))))));
         hintLabel.setBounds (area.removeFromTop (scaledInt (14.0f, scale)));
         return;
     }
@@ -1274,7 +1338,7 @@ void AdvancedVSTiAudioProcessorEditor::KnobCard::resized()
         toggleButton->setBounds ({});
     titleLabel.setBounds (area.removeFromTop (scaledInt ((lookAndFeel.theme.tribute303 || compact) ? 18.0f : 22.0f, scale)));
     hintLabel.setBounds (area.removeFromBottom (scaledInt (lookAndFeel.theme.tribute303 ? 16.0f : (compact ? 16.0f : 20.0f), scale)));
-    slider.setBounds (area.reduced (0, scaledInt (lookAndFeel.theme.tribute303 ? 0.0f : (compact ? 4.0f : 2.0f), scale)));
+    slider.setBounds (trimForMeter (area.reduced (0, scaledInt (lookAndFeel.theme.tribute303 ? 0.0f : (compact ? 4.0f : 2.0f), scale))));
 }
 
 AdvancedVSTiAudioProcessorEditor::ChoiceCard::ChoiceCard (Theme themeToUse, const ChoiceSpec& spec)
@@ -2079,7 +2143,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
                 return;
             }
 
-            const int knobColumns = fixedInstrumentKnobColumns (knobCards.size(), audioProcessor.isNativeFxFlavor());
+            const int knobColumns = fixedInstrumentKnobColumns (knobCards.size());
             const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);
             const int choiceRowWidth = choiceCards.isEmpty()
                                            ? 0
@@ -2160,6 +2224,7 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
     const auto choiceSpecs = buildChoiceSpecs();
     const auto knobSpecs = buildKnobSpecs();
     const auto drumPadSpecs = buildDrumPadSpecs();
+    outputGainKnobIndex = -1;
 
     badgeLabel.setText (isTribute303() ? "ACID BASS LINE EMULATOR TRIBUTE"
                                        : (isTribute909() ? "RHYTHM COMPOSER TRIBUTE"
@@ -2226,6 +2291,13 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
         auto* card = knobCards.add (new KnobCard (lookAndFeel, spec.title, spec.hint,
                                                   usesDrumPadLayout() || isTributeVirus(),
                                                   spec.toggleText));
+        const auto cardIndex = knobCards.size() - 1;
+        if (spec.paramId == "OUTPUTGAIN"
+            || (isTributeVirus() && spec.paramId == "MASTERLEVEL"))
+        {
+            card->setMeterEnabled (true);
+            outputGainKnobIndex = cardIndex;
+        }
         if (spec.previewMidiNote >= 0)
         {
             card->slider.onPreviewRequested = [this, midiNote = spec.previewMidiNote]
@@ -2552,6 +2624,9 @@ void AdvancedVSTiAudioProcessorEditor::timerCallback()
 
     if (audioProcessor.isNativeFxFlavor() && ! nativeFxVisualizerBounds.isEmpty())
         repaint (nativeFxVisualizerBounds.expanded (2));
+
+    if (juce::isPositiveAndBelow (outputGainKnobIndex, knobCards.size()))
+        knobCards[outputGainKnobIndex]->setMeterLevel (audioProcessor.getOutputMeterLevel());
 
     if (usesFixedInstrumentLayout()
         && fixedInstrumentOsdUntilMs > 0.0
@@ -4715,7 +4790,7 @@ AdvancedVSTiAudioProcessorEditor::Theme AdvancedVSTiAudioProcessorEditor::buildT
     if (name.contains ("drum"))
     {
         Theme tribute {
-            "AI Drum Machine",
+            "AI 909 Drum Machine",
             "909-style punch, clap and hats on a brighter rhythm-composer tribute panel.",
             juce::Colour::fromRGB (244, 126, 42), juce::Colour::fromRGB (255, 211, 167),
             juce::Colour::fromRGB (234, 232, 225), juce::Colour::fromRGB (229, 227, 218), juce::Colour::fromRGB (83, 88, 86),
@@ -4773,7 +4848,7 @@ AdvancedVSTiAudioProcessorEditor::Theme AdvancedVSTiAudioProcessorEditor::buildT
                  juce::Colours::white, juce::Colour::fromRGB (203, 219, 193) };
 
     if (name.contains ("bass"))
-        return { "AI Bass Synth", "Heavier subs, firmer harmonics, and a darker panel built for low-end shaping.",
+        return { "AI Bass Synth", "Sub bass, acid accents, and tied-note slides on a darker mono-bass panel.",
                  juce::Colour::fromRGB (82, 231, 166), juce::Colour::fromRGB (24, 153, 111),
                  juce::Colour::fromRGB (14, 18, 18), juce::Colour::fromRGB (18, 28, 27), juce::Colour::fromRGB (30, 87, 71),
                  juce::Colours::white, juce::Colour::fromRGB (175, 212, 202) };
@@ -4914,7 +4989,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (name.contains ("piano"))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Acoustic piano body model", { "Concert Grand", "Felt Upright", "Pop Piano", "Cinematic Hall" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Acoustic piano body model", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Tonal contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Brightness roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4922,7 +4997,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (isAcousticStringsPluginName (name))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Section and articulation profile", { "Chamber Ensemble", "Lush Section", "Pizzicato Stage", "Cinematic Swell" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Section and articulation profile", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Section contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Upper-harmonic roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4930,7 +5005,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (name.contains ("bass guitar"))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Bass pickup and playing style", { "Finger Bass", "Pick Bass", "Muted Bass", "Round Bass" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Bass pickup and playing style", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Low-end contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Top-end roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4938,7 +5013,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (name.contains ("violin"))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Bow and ensemble profile", { "Solo Legato", "Expressive Vib", "Studio Section", "Rosin Accent" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Bow and ensemble profile", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Body contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Upper-harmonic roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4946,7 +5021,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (name.contains ("flute"))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Breath and register model", { "Concert Flute", "Breathy Alto", "Whistle Air", "Warm Low Flute" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Breath and register model", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Air / body contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Top-end shape", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4954,7 +5029,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (name.contains ("sax"))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Tenor sax performance profile", { "Tenor Solo", "Tenor Warm", "Tenor Air", "Jazz Tenor" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Tenor sax performance profile", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Reed contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Top-edge focus", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4962,7 +5037,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (name.contains ("organ"))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Pipe organ stop profile", { "Cathedral Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Pipe organ stop profile", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Upper harmonic contour", { "Off", "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Brightness roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4970,7 +5045,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
 
     if (name.contains ("sampler"))
     {
-        specs.push_back ({ "SAMPLEBANK", "Source", "Generated sample bank", { "Dusty Keys", "Tape Choir", "Velvet Pluck", "Vox Chop", "Sub Stab", "Glass Bell" }, {}, false, 0 });
+        specs.push_back ({ "SAMPLEBANK", "Source", "Generated sample bank", parameterChoiceValues ("SAMPLEBANK"), {}, false, 0 });
         specs.push_back ({ "FILTERTYPE", "Filter", "Playback filter curve", { "LP", "BP", "HP", "Notch" }, {}, false, 0 });
         specs.push_back ({ "FILTERSLOPE", "Slope", "Playback roll-off", { "12 dB", "16 dB", "24 dB" }, {}, false, 0 });
         return specs;
@@ -4999,13 +5074,13 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
     if (name.contains ("graphic eq"))
         return {
             { "INPUTGAIN", "Input", "Pre-EQ gain trim" },
-            { "OUTPUTGAIN", "Output", "Post-EQ gain trim" },
+            { "OUTPUTGAIN", "Gain", "Post-EQ gain trim" },
         };
 
     if (name.contains ("parametric eq"))
         return {
             { "INPUTGAIN", "Input", "Pre-EQ gain trim" },
-            { "OUTPUTGAIN", "Output", "Post-EQ gain trim" },
+            { "OUTPUTGAIN", "Gain", "Post-EQ gain trim" },
         };
 
     if (name.contains ("delay"))
@@ -5018,7 +5093,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "DELAYCUTOFFLEFT", "L Cut", "Left feedback cutoff" },
             { "DELAYCUTOFFRIGHT", "R Cut", "Right feedback cutoff" },
             { "INPUTGAIN", "Input", "Pre-effect gain" },
-            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+            { "OUTPUTGAIN", "Gain", "Post-effect trim" },
         };
 
     if (name.contains ("reverb"))
@@ -5028,7 +5103,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "REVERBDAMP", "Damp", "High-end decay" },
             { "FXSPREAD", "Width", "Stereo image" },
             { "INPUTGAIN", "Input", "Pre-effect gain" },
-            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+            { "OUTPUTGAIN", "Gain", "Post-effect trim" },
         };
 
     if (name.contains ("chorus"))
@@ -5038,7 +5113,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "FXINTENSITY", "Depth", "Modulation depth" },
             { "FXCOLOUR", "Color", "Delay color" },
             { "FXSPREAD", "Spread", "Stereo offset" },
-            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+            { "OUTPUTGAIN", "Gain", "Post-effect trim" },
         };
 
     if (name.contains ("flanger"))
@@ -5048,7 +5123,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "FXINTENSITY", "Depth", "Comb depth" },
             { "FXCOLOUR", "Color", "Delay offset" },
             { "FXSPREAD", "Spread", "Feedback / stereo spread" },
-            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+            { "OUTPUTGAIN", "Gain", "Post-effect trim" },
         };
 
     if (name.contains ("phaser"))
@@ -5058,7 +5133,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "FXINTENSITY", "Depth", "Notch depth" },
             { "FXCOLOUR", "Color", "Centre frequency" },
             { "FXSPREAD", "Spread", "Stereo offset" },
-            { "OUTPUTGAIN", "Output", "Post-effect trim" },
+            { "OUTPUTGAIN", "Gain", "Post-effect trim" },
         };
 
     if (name.contains ("overdrive"))
@@ -5067,7 +5142,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "TONE", "Tone", "Post-drive brightness" },
             { "FXMIX", "Mix", "Parallel blend" },
             { "INPUTGAIN", "Input", "Pre-drive gain" },
-            { "OUTPUTGAIN", "Output", "Post-drive trim" },
+            { "OUTPUTGAIN", "Gain", "Post-drive trim" },
         };
 
     if (name.contains ("distortion"))
@@ -5077,7 +5152,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "FXSPREAD", "Bias", "Asymmetry / edge" },
             { "FXMIX", "Mix", "Parallel blend" },
             { "INPUTGAIN", "Input", "Pre-drive gain" },
-            { "OUTPUTGAIN", "Output", "Post-drive trim" },
+            { "OUTPUTGAIN", "Gain", "Post-drive trim" },
         };
 
     if (name.contains ("compress"))
@@ -5088,6 +5163,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "COMPRELEASE", "Release", "Release time (ms)" },
             { "MAKEUPGAIN", "Makeup", "Gain after compression" },
             { "FXMIX", "Mix", "Parallel blend" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("amp emulator"))
@@ -5097,7 +5173,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "PRESENCE", "Presence", "Upper-mid bite" },
             { "FXMIX", "Mix", "Dry / amped blend" },
             { "INPUTGAIN", "Input", "Preamp gain" },
-            { "OUTPUTGAIN", "Output", "Post-amp trim" },
+            { "OUTPUTGAIN", "Gain", "Post-amp trim" },
         };
 
     if (name.contains ("bit crusher"))
@@ -5106,7 +5182,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "SAMPLEREDUCE", "Rate", "Sample hold amount" },
             { "FXMIX", "Mix", "Dry / wet blend" },
             { "INPUTGAIN", "Input", "Pre-crush gain" },
-            { "OUTPUTGAIN", "Output", "Post-crush trim" },
+            { "OUTPUTGAIN", "Gain", "Post-crush trim" },
         };
 
     if (name.contains ("rhythm gate"))
@@ -5116,12 +5192,12 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "GATEFLOOR", "Floor", "Minimum open level" },
             { "FXMIX", "Mix", "Dry / wet blend" },
             { "FXSPREAD", "Stereo", "Channel offset" },
-            { "OUTPUTGAIN", "Output", "Post-gate trim" },
+            { "OUTPUTGAIN", "Gain", "Post-gate trim" },
         };
 
     if (isTributeVirus())
         return {
-            { "MASTERLEVEL", "Master", "Output level" },
+            { "MASTERLEVEL", "Gain", "Output level" },
             { "UNISON", "Unison", "Voice stack" },
             { "DETUNE", "Spread", "Unison width" },
             { "LFO1RATE", "LFO 1 Rate", "Pitch motion" },
@@ -5216,6 +5292,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "DRUMLEVEL_CLAVE", "Clave", "", 48 },
             { "DRUMLEVEL_MARACA", "Maraca", "", 49 },
             { "DRUMLEVEL_PERC", "Perc", "", 50 },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("303"))
@@ -5227,6 +5304,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "AMPDECAY", "Decay", "Short acidic note length" },
             { "FMAMOUNT", "Accent", "Extra bite and hit emphasis" },
             { "OSCGATE", "Slide", "Held length and glide-style overlap" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("drum"))
@@ -5275,73 +5353,88 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "DRUMLEVEL_CLAVE", "Clave", "", 48 },
             { "DRUMLEVEL_MARACA", "Maraca", "", 49 },
             { "DRUMLEVEL_PERC", "Perc", "", 50 },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("piano"))
         return {
             { "CUTOFF", "Tone", "Brightness and felt" },
+            { "SOURCEBLEND", "Blend", "Raw sample to profile mix" },
             { "FILTERENVAMOUNT", "Hammer", "Transient snap" },
             { "AMPDECAY", "Decay", "Body bloom" },
             { "AMPRELEASE", "Release", "Tail length" },
             { "REVERBMIX", "Room", "Instrument space" },
             { "FXMIX", "Color", "Subtle cabinet / character" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (isAcousticStringsPluginName (name))
         return {
             { "CUTOFF", "Tone", "Section brightness" },
+            { "SOURCEBLEND", "Blend", "Raw sample to profile mix" },
             { "FILTERENVAMOUNT", "Bow", "Attack and bow pressure" },
             { "AMPATTACK", "Attack", "Section onset" },
             { "AMPRELEASE", "Release", "Ensemble tail" },
             { "REVERBMIX", "Room", "Stage depth" },
             { "FXMIX", "Ensemble", "Width and motion" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("bass guitar"))
         return {
             { "CUTOFF", "Tone", "Pickup brightness" },
+            { "SOURCEBLEND", "Blend", "Raw sample to profile mix" },
             { "RESONANCE", "Res", "Focused edge" },
             { "FILTERENVAMOUNT", "Attack", "Pluck emphasis" },
             { "AMPDECAY", "Decay", "String settle" },
             { "AMPRELEASE", "Release", "Tail length" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("violin"))
         return {
             { "CUTOFF", "Tone", "Bow brightness" },
+            { "SOURCEBLEND", "Blend", "Raw sample to profile mix" },
             { "AMPATTACK", "Attack", "Bow rise" },
             { "AMPRELEASE", "Release", "Bow-off tail" },
             { "LFO1PITCH", "Vibrato", "Pitch motion" },
             { "REVERBMIX", "Room", "Stage space" },
             { "FXMIX", "Ensemble", "Width and movement" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("flute"))
         return {
             { "CUTOFF", "Tone", "Air brightness" },
+            { "SOURCEBLEND", "Blend", "Raw sample to profile mix" },
             { "AMPATTACK", "Attack", "Breath onset" },
             { "AMPRELEASE", "Release", "Breath tail" },
             { "LFO1PITCH", "Vibrato", "Pitch motion" },
             { "REVERBMIX", "Room", "Air around the source" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("sax"))
         return {
             { "CUTOFF", "Tone", "Reed brightness" },
+            { "SOURCEBLEND", "Blend", "Raw sample to profile mix" },
             { "RESONANCE", "Focus", "Nasal peak" },
             { "FILTERENVAMOUNT", "Bite", "Attack push" },
             { "LFO1PITCH", "Vibrato", "Pitch motion" },
             { "FXMIX", "Color", "Saturation / body" },
             { "REVERBMIX", "Room", "Stage depth" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("organ"))
         return {
             { "CUTOFF", "Tone", "Top-end contour" },
+            { "SOURCEBLEND", "Blend", "Raw sample to profile mix" },
             { "FXMIX", "Chorus", "Motion blend" },
             { "FXINTENSITY", "Depth", "Rotary / chorus depth" },
             { "AMPRELEASE", "Release", "Key-off tail" },
             { "REVERBMIX", "Room", "Cabinet / hall space" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("bass"))
@@ -5349,8 +5442,10 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "CUTOFF", "Cutoff", "Low-end brightness" },
             { "RESONANCE", "Resonance", "Focused filter edge" },
             { "FILTERENVAMOUNT", "Env Mod", "Envelope filter push" },
-            { "FMAMOUNT", "Growl", "Extra harmonic bite" },
-            { "AMPRELEASE", "Release", "Tail and sustain feel" },
+            { "AMPDECAY", "Decay", "Acid-style note falloff" },
+            { "FMAMOUNT", "Accent", "High-velocity 303-style emphasis" },
+            { "OSCGATE", "Slide", "Legato tie and glide response" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("pad"))
@@ -5360,6 +5455,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "AMPRELEASE", "Release", "Tail length" },
             { "DETUNE", "Detune", "Ensemble spread" },
             { "FILTERENVAMOUNT", "Bloom", "Envelope swell depth" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("lead") || name.contains ("pluck"))
@@ -5369,6 +5465,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "FMAMOUNT", "Bite", "Extra harmonic attack" },
             { "AMPDECAY", "Decay", "Hook length" },
             { "FILTERENVAMOUNT", "Env Mod", "Filter snap" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     if (name.contains ("sampler"))
@@ -5377,6 +5474,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
             { "SAMPLEEND", "End", "Playback end point" },
             { "CUTOFF", "Cutoff", "Tone shaping" },
             { "AMPRELEASE", "Release", "Tail length" },
+            { "OUTPUTGAIN", "Gain", "Final output trim" },
         };
 
     return {
@@ -5388,6 +5486,7 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
         { "FILTERENVAMOUNT", "Env Mod", "Envelope filter amount" },
         { "LFO1RATE", "LFO 1", "Primary movement speed" },
         { "LFO2RATE", "LFO 2", "Secondary movement speed" },
+        { "OUTPUTGAIN", "Gain", "Final output trim" },
     };
 }
 
@@ -6475,7 +6574,7 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
             if (! choiceCards.isEmpty())
                 content.removeFromTop (kFixedDrumChoiceHeight + kFixedDrumChoiceBottomGap);
 
-            const int masterWidth = fixedDrumSectionWidth (4);
+            const int masterWidth = fixedDrumSectionWidth (5);
             const int kickWidth = fixedDrumSectionWidth (4);
             const int snareWidth = fixedDrumSectionWidth (4);
             const int lowTomWidth = fixedDrumSectionWidth (3);
@@ -6711,8 +6810,6 @@ void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
         auto header = chassis.reduced (18.0f, 16.0f).removeFromTop (80.0f);
         g.setColour (theme.accent.withAlpha (0.78f));
         g.fillRoundedRectangle (header.removeFromBottom (3.0f), 1.5f);
-        g.setColour (theme.accentGlow.withAlpha (0.16f));
-        g.fillRoundedRectangle (header.removeFromRight (header.getWidth() * 0.45f).translated (0.0f, 6.0f), 16.0f);
         return;
     }
 
@@ -7949,7 +8046,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
                     pad->setBounds ({});
             };
 
-            const int masterWidth = fixedDrumSectionWidth (4);
+            const int masterWidth = fixedDrumSectionWidth (5);
             const int kickWidth = fixedDrumSectionWidth (4);
             const int snareWidth = fixedDrumSectionWidth (4);
             const int lowTomWidth = fixedDrumSectionWidth (3);
@@ -7996,7 +8093,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
                 }
             };
 
-            layoutSection ({ row1X, row1Y, masterWidth, kFixedDrumSectionHeight }, { 0, 1, 2, 3 });
+            layoutSection ({ row1X, row1Y, masterWidth, kFixedDrumSectionHeight }, { 0, 1, 2, 3, 35 });
             layoutSection ({ row1X + masterWidth + kFixedDrumSectionGap, row1Y, kickWidth, kFixedDrumSectionHeight }, { 4, 5, 6, 7 });
             layoutSection ({ row1X + masterWidth + kickWidth + (kFixedDrumSectionGap * 2), row1Y, snareWidth, kFixedDrumSectionHeight }, { 8, 9, 10, 11 });
 
@@ -8018,7 +8115,7 @@ void AdvancedVSTiAudioProcessorEditor::resized()
         for (auto* band : parametricEqBandControls)
             band->setBounds ({});
 
-        const int knobColumns = fixedInstrumentKnobColumns (knobCards.size(), audioProcessor.isNativeFxFlavor());
+        const int knobColumns = fixedInstrumentKnobColumns (knobCards.size());
         const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);
         int knobIndex = 0;
         int rowY = area.getY();

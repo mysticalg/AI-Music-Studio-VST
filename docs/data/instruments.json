@@ -13,16 +13,16 @@
     }
   },
   {
-    "slug": "ai-drum-machine",
+    "slug": "ai-909-drum-machine",
     "targetName": "AIDrumMachine",
-    "productName": "AI Drum Machine",
+    "productName": "AI 909 Drum Machine",
     "family": "Drum Machine",
-    "summary": "909-leaning drum workstation with punchy synthesized kit voices and performance controls.",
-    "tags": ["909 flavor", "synth drums", "performance controls"],
-    "screenshot": "./screenshots/ai-drum-machine.png",
+    "summary": "TR-909 drum workstation with punchy one-shots, synthesized kit voices, and performance controls.",
+    "tags": ["tr-909", "sampled drums", "performance controls"],
+    "screenshot": "./screenshots/ai-909-drum-machine.png",
     "releaseAssets": {
-      "vst3": "ai-drum-machine-vst3.zip",
-      "standalone": "ai-drum-machine-standalone.zip"
+      "vst3": "ai-909-drum-machine-vst3.zip",
+      "standalone": "ai-909-drum-machine-standalone.zip"
     }
   },
   {

@@ -25,6 +25,10 @@
 #define AIMS_VEC1_LIBRARY_PATH ""
 #endif
 
+#ifndef AIMS_TR909_LIBRARY_PATH
+#define AIMS_TR909_LIBRARY_PATH ""
+#endif
+
 namespace
 {
 constexpr float twoPi = juce::MathConstants<float>::twoPi;
@@ -178,6 +182,29 @@ juce::StringArray advancedOscillatorChoices()
         "WT Metal",
         "WT Vocal"
     };
+}
+
+float bassAccentControlAmount (float fmAmount)
+{
+    const auto normalized = juce::jlimit (0.0f, 1.0f, fmAmount / 1000.0f);
+    return std::pow (normalized, 0.72f);
+}
+
+float bassAccentTriggerAmount (float velocity)
+{
+    return juce::jlimit (0.0f, 1.0f, (juce::jlimit (0.0f, 1.0f, velocity) - (100.0f / 127.0f)) / 0.18f);
+}
+
+float bassSlideTimeSeconds (float gateLength)
+{
+    const auto slideNorm = juce::jlimit (0.0f, 1.0f, (gateLength - 0.14f) / 0.72f);
+    return juce::jmap (slideNorm * slideNorm, 0.0f, 0.17f);
+}
+
+float bassSquarePulseWidthForMidiNote (float midiNote)
+{
+    const auto trackedWidth = 0.54f - ((midiNote - 48.0f) * 0.0024f);
+    return juce::jlimit (0.36f, 0.62f, trackedWidth);
 }
 
 juce::StringArray builtInAdvancedVirusPresetChoices()
@@ -594,6 +621,63 @@ int importedChoice (const ImportedVirusPresetData& preset, int startOffset, int 
                          static_cast<int> (std::floor (importedAverageNorm (preset, startOffset, count) * static_cast<float> (choiceCount))));
 }
 
+int nearestZeroCrossingSampleOffset (const juce::AudioBuffer<float>& audio, int desiredOffset, int searchRadius)
+{
+    const auto totalSamples = audio.getNumSamples();
+    if (totalSamples <= 0)
+        return 0;
+
+    const auto clampedOffset = juce::jlimit (0, totalSamples - 1, desiredOffset);
+    const auto clampedRadius = juce::jlimit (0, totalSamples - 1, searchRadius);
+    const auto* data = audio.getReadPointer (0);
+    auto bestIndex = clampedOffset;
+    auto bestMagnitude = std::abs (data[clampedOffset]);
+
+    auto considerIndex = [&] (int candidateIndex) -> bool
+    {
+        const auto index = juce::jlimit (0, totalSamples - 1, candidateIndex);
+        const auto sample = data[index];
+        const auto magnitude = std::abs (sample);
+
+        if (magnitude < bestMagnitude)
+        {
+            bestMagnitude = magnitude;
+            bestIndex = index;
+        }
+
+        if (magnitude <= 0.0025f)
+        {
+            bestIndex = index;
+            return true;
+        }
+
+        if (index > 0)
+        {
+            const auto previous = data[index - 1];
+            if ((previous <= 0.0f && sample >= 0.0f) || (previous >= 0.0f && sample <= 0.0f))
+            {
+                bestIndex = std::abs (sample) <= std::abs (previous) ? index : (index - 1);
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    if (considerIndex (clampedOffset))
+        return bestIndex;
+
+    for (int distance = 1; distance <= clampedRadius; ++distance)
+    {
+        if (considerIndex (clampedOffset - distance))
+            return bestIndex;
+        if (considerIndex (clampedOffset + distance))
+            return bestIndex;
+    }
+
+    return bestIndex;
+}
+
 juce::String importedVirusCategoryCode (const ImportedVirusPresetData& preset)
 {
     const auto lowerName = preset.name.toLowerCase();
@@ -770,6 +854,7 @@ juce::File repoLinkedCacheRoot (const juce::String& folderName);
 juce::String regionAttributeValue (const juce::String& line, const juce::String& key);
 int regionAttributeInt (const juce::String& line, const juce::String& key, int defaultValue);
 float regionAttributeFloat (const juce::String& line, const juce::String& key, float defaultValue);
+std::vector<juce::File> findSortedChildDirectories (const juce::File& folder);
 
 juce::File configuredLibraryRoot (const juce::String& configuredPath)
 {
@@ -966,6 +1051,84 @@ juce::File openInstrumentSamplesRoot()
         return installedRoot;
 
     return repoLinkedCacheRoot ("OpenInstrumentSamples");
+}
+
+juce::File tr909LibraryRoot()
+{
+    const auto bundledRoot = bundledInstrumentResourceRoot ("TR909Samples");
+    if (bundledRoot.isDirectory())
+        return bundledRoot;
+
+    const auto runtimeRoot = runtimeLibraryOverride ("AI_MUSIC_STUDIO_TR909_LIBRARY");
+    if (runtimeRoot.isDirectory())
+        return runtimeRoot;
+
+    const auto configuredRoot = configuredLibraryRoot (juce::String (AIMS_TR909_LIBRARY_PATH));
+    if (configuredRoot.isDirectory())
+        return configuredRoot;
+
+    const auto installedRoot = installedSharedLibraryRoot ("TR909Samples");
+    if (installedRoot.isDirectory())
+        return installedRoot;
+
+    return repoLinkedCacheRoot ("TR909Samples");
+}
+
+bool tr909ContentRootIsValid (const juce::File& candidate)
+{
+    return candidate.isDirectory()
+           && candidate.getChildFile ("BassDrum").isDirectory()
+           && candidate.getChildFile ("SnareDrum").isDirectory()
+           && candidate.getChildFile ("ClosedHat").isDirectory();
+}
+
+juce::File findTr909SampleContentRoot (const juce::File& root)
+{
+    if (! root.isDirectory())
+        return {};
+
+    if (tr909ContentRootIsValid (root))
+        return root;
+
+    for (const auto& child : findSortedChildDirectories (root))
+    {
+        if (tr909ContentRootIsValid (child))
+            return child;
+
+        for (const auto& grandChild : findSortedChildDirectories (child))
+        {
+            if (tr909ContentRootIsValid (grandChild))
+                return grandChild;
+        }
+    }
+
+    return {};
+}
+
+int taggedSampleValue (const juce::String& fileNameLower, const juce::String& tag)
+{
+    const auto token = tag.toLowerCase();
+    const auto index = fileNameLower.indexOf (token);
+    if (index < 0)
+        return -1;
+
+    auto cursor = index + token.length();
+    while (cursor < fileNameLower.length())
+    {
+        const auto ch = fileNameLower[cursor];
+        if (ch >= '0' && ch <= '9')
+            break;
+        ++cursor;
+    }
+
+    if (cursor >= fileNameLower.length() || ! juce::CharacterFunctions::isDigit (fileNameLower[cursor]))
+        return -1;
+
+    auto end = cursor;
+    while (end < fileNameLower.length() && juce::CharacterFunctions::isDigit (fileNameLower[end]))
+        ++end;
+
+    return fileNameLower.substring (cursor, end).getIntValue();
 }
 
 juce::String normalizeRepoRelativePath (const juce::String& rawPath)
@@ -1686,6 +1849,9 @@ struct AdvancedVSTiAudioProcessor::AcousticSampleLibrary
         float gain = 1.0f;
         float tuneSemitones = 0.0f;
         bool loopEnabled = false;
+        bool oneShot = false;
+        int seqPosition = 0;
+        int seqLength = 0;
         juce::String layerName;
         std::shared_ptr<const ExternalSampleData> sample;
     };
@@ -1709,6 +1875,8 @@ AdvancedVSTiAudioProcessor::AdvancedVSTiAudioProcessor()
     audioFormatManager.registerBasicFormats();
     initializeExternalPadLibrary();
     apvts.addParameterListener ("PRESET", this);
+    if constexpr (isAcousticFlavor() && buildFlavor() != InstrumentFlavor::piano)
+        apvts.addParameterListener ("SAMPLEBANK", this);
     if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
     {
         for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
@@ -1734,6 +1902,8 @@ AdvancedVSTiAudioProcessor::~AdvancedVSTiAudioProcessor()
         for (int padIndex = 0; padIndex < vecPadCount; ++padIndex)
             apvts.removeParameterListener (externalPadSampleParameterIdForIndex (padIndex), this);
     }
+    if constexpr (isAcousticFlavor() && buildFlavor() != InstrumentFlavor::piano)
+        apvts.removeParameterListener ("SAMPLEBANK", this);
     apvts.removeParameterListener ("PRESET", this);
 }
 
@@ -1760,6 +1930,11 @@ float AdvancedVSTiAudioProcessor::getEqAnalyzerMagnitudeDb (bool postEq, int bin
     const auto clampedIndex = juce::jlimit (0, eqAnalyzerBinCountValue - 1, binIndex);
     return postEq ? eqAnalyzerOutputMagnitudes[static_cast<size_t> (clampedIndex)].load()
                   : eqAnalyzerInputMagnitudes[static_cast<size_t> (clampedIndex)].load();
+}
+
+float AdvancedVSTiAudioProcessor::getOutputMeterLevel() const noexcept
+{
+    return outputMeterLevel.load();
 }
 
 bool AdvancedVSTiAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -1988,6 +2163,7 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     cachedEqSettings.valid = false;
     cachedGraphicEqSettings.valid = false;
     cachedParametricEqSettings.valid = false;
+    outputMeterLevel.store (0.0f);
     for (auto& value : eqAnalyzerInputMagnitudes)
         value.store (-100.0f);
     for (auto& value : eqAnalyzerOutputMagnitudes)
@@ -2017,11 +2193,13 @@ void AdvancedVSTiAudioProcessor::releaseResources()
     cachedEqSettings.valid = false;
     cachedGraphicEqSettings.valid = false;
     cachedParametricEqSettings.valid = false;
+    outputMeterLevel.store (0.0f);
 }
 
 void AdvancedVSTiAudioProcessor::reset()
 {
     heldNotes.clear();
+    heldNoteVelocities.fill (0.0f);
     resetArpState();
     lfo1Phase = 0.0f;
     lfo2Phase = 0.0f;
@@ -2030,6 +2208,7 @@ void AdvancedVSTiAudioProcessor::reset()
     arpHoldEnabled.store (false);
     pendingReleaseHeldNotes.store (false);
     pendingPanicAllNotes.store (false);
+    acousticRoundRobinCounter = 0;
     pendingAuditionNote.store (-1);
     activeAuditionNote = -1;
     auditionSamplesRemaining = 0;
@@ -2089,6 +2268,7 @@ void AdvancedVSTiAudioProcessor::reset()
     eqAnalyzerOutputFftData.fill (0.0f);
     eqAnalyzerInputFifoIndex = 0;
     eqAnalyzerOutputFifoIndex = 0;
+    outputMeterLevel.store (0.0f);
     for (auto& value : eqAnalyzerInputMagnitudes)
         value.store (-100.0f);
     for (auto& value : eqAnalyzerOutputMagnitudes)
@@ -2127,9 +2307,10 @@ void AdvancedVSTiAudioProcessor::reset()
 juce::StringArray AdvancedVSTiAudioProcessor::sampleBankChoices()
 {
     if constexpr (buildFlavor() == InstrumentFlavor::piano)
-        return { "Concert Grand", "Felt Upright", "Pop Piano", "Cinematic Hall" };
+        return { "Concert Grand", "Felt Upright", "Pop Piano", "Cinematic Hall",
+                 "Stage Bright", "Noir Warmth", "Glass Grand", "Intimate Wood" };
     if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
-        return { "Chamber Ensemble", "Lush Section", "Pizzicato Stage", "Cinematic Swell" };
+        return { "Lush Section", "Pizzicato Stage", "Cinematic Swell", "Harmonic Glass", "Col Legno Pulse" };
     if constexpr (buildFlavor() == InstrumentFlavor::violin)
         return { "Solo Legato", "Expressive Vib", "Studio Section", "Rosin Accent" };
     if constexpr (buildFlavor() == InstrumentFlavor::flute)
@@ -2139,7 +2320,7 @@ juce::StringArray AdvancedVSTiAudioProcessor::sampleBankChoices()
     if constexpr (buildFlavor() == InstrumentFlavor::bassGuitar)
         return { "Finger Bass", "Pick Bass", "Muted Bass", "Round Bass" };
     if constexpr (buildFlavor() == InstrumentFlavor::organ)
-        return { "Cathedral Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" };
+        return { "Grand Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" };
     return { "Dusty Keys", "Tape Choir", "Velvet Pluck", "Vox Chop", "Sub Stab", "Glass Bell" };
 }
 
@@ -2150,7 +2331,7 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
     if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
         return { "VEC1 Default" };
     if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
-        return { "Sub Bass", "Saw Bass", "Square Bass", "Picked Bass" };
+        return { "Sub Bass", "Saw Acid", "Square Acid", "Picked Bass" };
     if constexpr (buildFlavor() == InstrumentFlavor::leadSynth)
         return { "Saw Lead", "Square Solo", "Soft Lead", "Brass Lead" };
     if constexpr (buildFlavor() == InstrumentFlavor::padSynth)
@@ -2160,9 +2341,10 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
     if constexpr (buildFlavor() == InstrumentFlavor::sampler)
         return { "Dusty Keys", "Tape Choir", "Velvet Pluck", "Vox Chop", "Sub Stab", "Glass Bell" };
     if constexpr (buildFlavor() == InstrumentFlavor::piano)
-        return { "Concert Grand", "Felt Upright", "Pop Piano", "Cinematic Hall" };
+        return { "Concert Grand", "Felt Upright", "Pop Piano", "Cinematic Hall",
+                 "Stage Bright", "Noir Warmth", "Glass Grand", "Intimate Wood" };
     if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
-        return { "Chamber Ensemble", "Lush Section", "Pizzicato Stage", "Cinematic Swell" };
+        return { "Lush Section", "Pizzicato Stage", "Cinematic Swell", "Harmonic Glass", "Col Legno Pulse" };
     if constexpr (buildFlavor() == InstrumentFlavor::violin)
         return { "Solo Legato", "Expressive Vibrato", "Studio Section", "Rosin Accent" };
     if constexpr (buildFlavor() == InstrumentFlavor::flute)
@@ -2172,7 +2354,7 @@ juce::StringArray AdvancedVSTiAudioProcessor::presetChoicesForFlavor()
     if constexpr (buildFlavor() == InstrumentFlavor::bassGuitar)
         return { "Finger Bass", "Pick Bass", "Muted Bass", "Round Bass" };
     if constexpr (buildFlavor() == InstrumentFlavor::organ)
-        return { "Cathedral Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" };
+        return { "Grand Principal", "Soft Stops", "Bright Mixture", "Warm Diapason" };
     if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
         return { "Studio Delay" };
     if constexpr (buildFlavor() == InstrumentFlavor::reverbFx)
@@ -2384,10 +2566,10 @@ void AdvancedVSTiAudioProcessor::initializePianoSampleLibrary()
     };
 
     constexpr std::array<LayerConfig, 4> layers {
-        LayerConfig { "PP.txt", "PP", 1, 67 },
-        LayerConfig { "MP.txt", "MP", 68, 84 },
-        LayerConfig { "MF.txt", "MF", 85, 100 },
-        LayerConfig { "FF.txt", "FF", 101, 127 }
+        LayerConfig { "PP.txt", "PP", 1, 42 },
+        LayerConfig { "MP.txt", "MP", 43, 72 },
+        LayerConfig { "MF.txt", "MF", 73, 102 },
+        LayerConfig { "FF.txt", "FF", 103, 127 }
     };
 
     const auto dataDir = libraryRoot.getChildFile ("Data");
@@ -2440,6 +2622,38 @@ void AdvancedVSTiAudioProcessor::initializePianoSampleLibrary()
     cachedLibrary = library;
 }
 
+static juce::String fallbackGrandOrgueOrganRelativeSfzPathForBank (int bankIndex)
+{
+    switch (bankIndex)
+    {
+        case 1: return "Organ/GrandOrgue-BureaChurch/soft-stops.sfz";
+        case 2: return "Organ/GrandOrgue-BureaChurch/bright-mixture.sfz";
+        case 3: return "Organ/GrandOrgue-BureaChurch/warm-diapason.sfz";
+        default: return "Organ/GrandOrgue-BureaChurch/cathedral-principal.sfz";
+    }
+}
+
+static juce::String preferredGrandOrgueOrganRelativeSfzPathForBank (const juce::File& root, int bankIndex)
+{
+    if (bankIndex == 0)
+    {
+        constexpr auto piteaPath = "Organ/GrandOrgue-PiteaMHS/grand-principal.sfz";
+        if (root.getChildFile (piteaPath).existsAsFile())
+            return piteaPath;
+    }
+
+    const auto fallbackPath = fallbackGrandOrgueOrganRelativeSfzPathForBank (bankIndex);
+    if (! fallbackPath.isEmpty() && root.getChildFile (fallbackPath).existsAsFile())
+        return fallbackPath;
+
+    return {};
+}
+
+static bool hasGrandOrgueOrganBank (const juce::File& root, int bankIndex)
+{
+    return ! preferredGrandOrgueOrganRelativeSfzPathForBank (root, bankIndex).isEmpty();
+}
+
 void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
 {
     if constexpr (! isAcousticFlavor() || buildFlavor() == InstrumentFlavor::piano)
@@ -2449,16 +2663,19 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
     if (loadedAcousticSampleBank == clampedBank)
         return;
 
+    const auto root = openInstrumentSamplesRoot();
+
     auto relativeSfzPath = [&] () -> juce::String
     {
         if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
         {
             switch (clampedBank)
             {
-                case 1: return "Sonatina Symphonic Orchestra/Strings - Performance/1st Violins Sustain.sfz";
-                case 2: return "Sonatina Symphonic Orchestra/Strings - Performance/All Strings Pizzicato.sfz";
-                case 3: return "Sonatina Symphonic Orchestra/Strings - Performance/All Strings Tremolo.sfz";
-                default: return "Sonatina Symphonic Orchestra/Strings - Performance/All Strings Sustain.sfz";
+                case 1: return "Sonatina Symphonic Orchestra/Strings - Performance/All Strings Pizzicato.sfz";
+                case 2: return "Sonatina Symphonic Orchestra/Strings - Performance/All Strings Tremolo.sfz";
+                case 3: return "Sonatina Symphonic Orchestra/Strings - Performance/All Strings Harmonics.sfz";
+                case 4: return "Sonatina Symphonic Orchestra/Strings - Performance/All Strings Col Legno.sfz";
+                default: return "Sonatina Symphonic Orchestra/Strings - Performance/1st Violins Sustain.sfz";
             }
         }
         if constexpr (buildFlavor() == InstrumentFlavor::violin)
@@ -2495,16 +2712,26 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
         }
         if constexpr (buildFlavor() == InstrumentFlavor::organ)
         {
+            if (hasGrandOrgueOrganBank (root, clampedBank))
+                return preferredGrandOrgueOrganRelativeSfzPathForBank (root, clampedBank);
             return "Organ/ChurchOrganEmulation-SFZ-20190924/ChurchOrganEmulation-20190924.sfz";
         }
         return {};
     }();
 
-    const auto root = openInstrumentSamplesRoot();
     const auto sfzFile = root.getChildFile (relativeSfzPath);
     if (! root.isDirectory() || relativeSfzPath.isEmpty() || ! sfzFile.existsAsFile())
     {
         acousticSampleLibrary.reset();
+        acousticSampleLibrariesByBank.erase (clampedBank);
+        loadedAcousticSampleBank = clampedBank;
+        return;
+    }
+
+    if (const auto cachedBank = acousticSampleLibrariesByBank.find (clampedBank);
+        cachedBank != acousticSampleLibrariesByBank.end() && cachedBank->second != nullptr)
+    {
+        acousticSampleLibrary = cachedBank->second;
         loadedAcousticSampleBank = clampedBank;
         return;
     }
@@ -2517,7 +2744,8 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
         const std::lock_guard<std::mutex> lock (cacheMutex);
         if (auto cached = cachedLibraries[cacheKey].lock())
         {
-            acousticSampleLibrary = std::move (cached);
+            acousticSampleLibrary = cached;
+            acousticSampleLibrariesByBank[clampedBank] = cached;
             loadedAcousticSampleBank = clampedBank;
             return;
         }
@@ -2535,13 +2763,14 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
             destination[key] = value;
     };
 
-    auto buildRegion = [&] (const SfzOpcodeMap& controlOps, const SfzOpcodeMap& regionOps)
+    auto buildRegion = [&] (const juce::File& sampleBaseDir,
+                            const SfzOpcodeMap& controlOps,
+                            const SfzOpcodeMap& regionOps)
     {
         const auto samplePath = sfzValueOrEmpty (regionOps, "sample");
         if (samplePath.isEmpty())
             return;
 
-        const auto sampleBaseDir = sfzFile.getParentDirectory();
         const auto sampleFile = resolveSfzPath (sampleBaseDir, samplePath);
         if (! sampleFile.existsAsFile())
             return;
@@ -2588,6 +2817,9 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
         region.loopStart = juce::jmax (0, sfzIntValue (regionOps, "loop_start", 0));
         region.loopEnd = juce::jmax (region.loopStart + 1, sfzIntValue (regionOps, "loop_end", sampleData->audio.getNumSamples()));
         region.loopEnabled = sfzValueOrEmpty (regionOps, "loop_mode").containsIgnoreCase ("loop");
+        region.oneShot = sfzValueOrEmpty (regionOps, "loop_mode").containsIgnoreCase ("one_shot");
+        region.seqPosition = juce::jmax (0, sfzIntValue (regionOps, "seq_position", 0));
+        region.seqLength = juce::jmax (0, sfzIntValue (regionOps, "seq_length", 0));
         region.tuneSemitones = sfzFloatValue (regionOps, "tune", 0.0f) / 100.0f;
 
         auto gainDb = 0.0f;
@@ -2632,7 +2864,7 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
         auto flushRegion = [&]
         {
             if (regionActive)
-                buildRegion (controlOps, regionOps);
+                buildRegion (file.getParentDirectory(), controlOps, regionOps);
             regionOps.clear();
             regionActive = false;
         };
@@ -2730,10 +2962,37 @@ void AdvancedVSTiAudioProcessor::initializeAcousticSampleLibrary (int bankIndex)
     parseSfzFile (sfzFile, {}, {}, {}, {});
     library->available = ! library->regions.empty();
     acousticSampleLibrary = library->available ? library : std::shared_ptr<const AcousticSampleLibrary> {};
+    if (library->available)
+        acousticSampleLibrariesByBank[clampedBank] = library;
+    else
+        acousticSampleLibrariesByBank.erase (clampedBank);
     loadedAcousticSampleBank = library->available ? clampedBank : -1;
 
     const std::lock_guard<std::mutex> lock (cacheMutex);
     cachedLibraries[cacheKey] = library;
+}
+
+void AdvancedVSTiAudioProcessor::preloadAcousticSampleBanks()
+{
+    if constexpr (! isAcousticFlavor() || buildFlavor() == InstrumentFlavor::piano)
+        return;
+
+    if (acousticSampleBanksPreloaded)
+        return;
+
+    const auto banks = sampleBankChoices();
+    if (banks.size() <= 1)
+    {
+        acousticSampleBanksPreloaded = true;
+        return;
+    }
+
+    const auto targetBank = juce::jlimit (0, juce::jmax (0, banks.size() - 1), renderParams.sampleBank);
+    for (int bankIndex = 0; bankIndex < banks.size(); ++bankIndex)
+        initializeAcousticSampleLibrary (bankIndex);
+
+    initializeAcousticSampleLibrary (targetBank);
+    acousticSampleBanksPreloaded = true;
 }
 
 void AdvancedVSTiAudioProcessor::assignAcousticSampleToVoice (VoiceState& voice, int midiNote, float velocity)
@@ -2750,13 +3009,52 @@ void AdvancedVSTiAudioProcessor::assignAcousticSampleToVoice (VoiceState& voice,
     voice.externalSampleLoopEnd = 0;
     voice.externalSampleLoopEnabled = false;
 
-    initializeAcousticSampleLibrary (renderParams.sampleBank);
+    const auto targetBank = juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), renderParams.sampleBank);
+    if (targetBank != loadedAcousticSampleBank)
+    {
+        if (const auto cachedBank = acousticSampleLibrariesByBank.find (targetBank);
+            cachedBank != acousticSampleLibrariesByBank.end() && cachedBank->second != nullptr)
+        {
+            acousticSampleLibrary = cachedBank->second;
+            loadedAcousticSampleBank = targetBank;
+        }
+        else
+        {
+            return;
+        }
+    }
 
     const auto library = acousticSampleLibrary;
-    if (library == nullptr || ! library->available)
+    if (library == nullptr || ! library->available || loadedAcousticSampleBank != targetBank)
         return;
 
-    const auto velocityMidi = juce::jlimit (1, 127, juce::roundToInt (juce::jlimit (0.0f, 1.0f, velocity) * 127.0f));
+    const auto velocityNorm = juce::jlimit (0.0f, 1.0f, velocity);
+    const auto velocityMidi = juce::jlimit (1, 127, juce::roundToInt (velocityNorm * 127.0f));
+    auto preferredVelocityMidi = velocityMidi;
+    auto preferredSequencePosition = 0;
+    if constexpr (buildFlavor() == InstrumentFlavor::saxophone)
+    {
+        switch (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), renderParams.sampleBank))
+        {
+            case 1:
+                preferredVelocityMidi = juce::jmax (1, velocityMidi - 18);
+                break;
+            case 2:
+                preferredVelocityMidi = juce::jmin (127, velocityMidi + 12);
+                break;
+            case 3:
+                preferredVelocityMidi = juce::jmin (127, velocityMidi + 20);
+                break;
+            default:
+                break;
+        }
+    }
+    if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
+    {
+        const auto bankIndex = juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), renderParams.sampleBank);
+        if (bankIndex == 4)
+            preferredSequencePosition = (acousticRoundRobinCounter++ % 2) + 1;
+    }
     const AcousticSampleLibrary::Region* bestRegion = nullptr;
     auto bestScore = (std::numeric_limits<int>::max)();
 
@@ -2766,12 +3064,40 @@ void AdvancedVSTiAudioProcessor::assignAcousticSampleToVoice (VoiceState& voice,
             continue;
 
         auto score = std::abs (region.rootMidi - midiNote);
-        if (velocityMidi >= region.lowVelocity && velocityMidi <= region.highVelocity)
+        if (preferredVelocityMidi >= region.lowVelocity && preferredVelocityMidi <= region.highVelocity)
             score -= 512;
-        else if (velocityMidi < region.lowVelocity)
-            score += (region.lowVelocity - velocityMidi) * 8;
+        else if (preferredVelocityMidi < region.lowVelocity)
+            score += (region.lowVelocity - preferredVelocityMidi) * 8;
         else
-            score += (velocityMidi - region.highVelocity) * 8;
+            score += (preferredVelocityMidi - region.highVelocity) * 8;
+
+        if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
+        {
+            const auto bankIndex = juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), renderParams.sampleBank);
+            const auto preferShortArticulation = bankIndex == 1 || bankIndex == 4;
+            const auto preferLongArticulation = ! preferShortArticulation;
+
+            if (preferShortArticulation)
+                score += region.oneShot ? -640 : 640;
+            else if (preferLongArticulation && region.oneShot)
+                score += 768;
+
+            if (region.seqLength > 0 && region.seqPosition > 0)
+            {
+                if (preferredSequencePosition > 0)
+                {
+                    const auto expectedPosition = ((preferredSequencePosition - 1) % region.seqLength) + 1;
+                    if (region.seqPosition == expectedPosition)
+                        score -= 96;
+                    else
+                        score += 144;
+                }
+                else
+                {
+                    score += 24;
+                }
+            }
+        }
 
         if (score < bestScore)
         {
@@ -2787,14 +3113,53 @@ void AdvancedVSTiAudioProcessor::assignAcousticSampleToVoice (VoiceState& voice,
     voice.externalSampleRootMidi = bestRegion->rootMidi;
     voice.externalSampleGain = bestRegion->gain;
     voice.externalSampleTuneSemitones = bestRegion->tuneSemitones;
-    voice.externalSampleLoopStart = juce::jlimit (0, juce::jmax (0, bestRegion->sample->audio.getNumSamples() - 1), bestRegion->loopStart);
+    const auto totalSamples = bestRegion->sample->audio.getNumSamples();
+    voice.externalSampleLoopStart = juce::jlimit (0, juce::jmax (0, totalSamples - 1), bestRegion->loopStart);
     voice.externalSampleLoopEnd = juce::jlimit (voice.externalSampleLoopStart + 1,
-                                                juce::jmax (1, bestRegion->sample->audio.getNumSamples()),
+                                                juce::jmax (1, totalSamples),
                                                 bestRegion->loopEnd);
     voice.externalSampleLoopEnabled = bestRegion->loopEnabled && voice.externalSampleLoopEnd > voice.externalSampleLoopStart;
-    const auto startOffset = juce::jlimit (0,
-                                           juce::jmax (0, bestRegion->sample->audio.getNumSamples() - 1),
-                                           bestRegion->startOffset);
+    auto startOffset = juce::jlimit (0,
+                                     juce::jmax (0, totalSamples - 1),
+                                     bestRegion->startOffset);
+    if constexpr (buildFlavor() == InstrumentFlavor::saxophone)
+    {
+        switch (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), renderParams.sampleBank))
+        {
+            case 1:
+                voice.externalSampleGain *= 1.08f - (velocityNorm * 0.05f);
+                voice.externalSampleTuneSemitones -= 0.06f;
+                startOffset = juce::jlimit (0,
+                                            juce::jmax (0, totalSamples - 1),
+                                            startOffset + juce::roundToInt (14.0f + ((1.0f - velocityNorm) * 26.0f)));
+                voice.colourState = -0.04f;
+                voice.articulationState = 0.03f;
+                break;
+            case 2:
+                voice.externalSampleGain *= 0.96f + (velocityNorm * 0.04f);
+                voice.externalSampleTuneSemitones += 0.02f;
+                voice.colourState = 0.07f;
+                voice.articulationState = 0.1f;
+                break;
+            case 3:
+                voice.externalSampleGain *= 1.08f + (velocityNorm * 0.05f);
+                voice.externalSampleTuneSemitones += 0.04f;
+                voice.colourState = 0.12f;
+                voice.articulationState = 0.16f;
+                break;
+            default:
+                voice.externalSampleGain *= 1.01f;
+                voice.colourState = 0.02f;
+                voice.articulationState = 0.06f;
+                break;
+        }
+
+        startOffset = nearestZeroCrossingSampleOffset (bestRegion->sample->audio, startOffset, 96);
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
+    {
+        startOffset = nearestZeroCrossingSampleOffset (bestRegion->sample->audio, startOffset, 96);
+    }
     voice.externalSamplePosition = static_cast<double> (startOffset);
 }
 
@@ -2864,6 +3229,14 @@ void AdvancedVSTiAudioProcessor::assignPianoSampleToVoice (VoiceState& voice, in
         return;
 
     const auto velocityMidi = juce::jlimit (1, 127, juce::roundToInt (juce::jlimit (0.0f, 1.0f, velocity) * 127.0f));
+    const auto bankIndex = juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), renderParams.sampleBank);
+    const auto feltBank = bankIndex == 1;
+    const auto popBank = bankIndex == 2;
+    const auto hallBank = bankIndex == 3;
+    const auto stageBank = bankIndex == 4;
+    const auto noirBank = bankIndex == 5;
+    const auto glassBank = bankIndex == 6;
+    const auto intimateBank = bankIndex == 7;
     const PianoSampleLibrary::Region* bestRegion = nullptr;
     auto bestScore = (std::numeric_limits<int>::max)();
 
@@ -2880,6 +3253,22 @@ void AdvancedVSTiAudioProcessor::assignPianoSampleToVoice (VoiceState& voice, in
         else
             score += (velocityMidi - region.highVelocity) * 8;
 
+        const auto layerMid = (region.lowVelocity + region.highVelocity) / 2;
+        if (feltBank)
+            score += juce::jmax (0, layerMid - 56) * 5;
+        else if (popBank)
+            score += std::abs (layerMid - 82) * 3;
+        else if (hallBank)
+            score += std::abs (layerMid - 70) * 2;
+        else if (stageBank)
+            score += juce::jmax (0, 74 - layerMid) * 5;
+        else if (noirBank)
+            score += juce::jmax (0, layerMid - 68) * 4;
+        else if (glassBank)
+            score += juce::jmax (0, 84 - layerMid) * 5;
+        else if (intimateBank)
+            score += juce::jmax (0, layerMid - 62) * 4;
+
         if (score < bestScore)
         {
             bestScore = score;
@@ -2892,11 +3281,209 @@ void AdvancedVSTiAudioProcessor::assignPianoSampleToVoice (VoiceState& voice, in
 
     voice.externalSample = bestRegion->sample;
     voice.externalSampleRootMidi = bestRegion->rootMidi;
-    voice.externalSampleGain = bestRegion->gain;
+    const auto velocityNorm = juce::jlimit (0.0f, 1.0f, velocity);
+    const auto layerCentre = (static_cast<float> (bestRegion->lowVelocity + bestRegion->highVelocity) * 0.5f) / 127.0f;
+    const auto layerDistance = std::abs (velocityNorm - layerCentre);
+    const auto dynamicGain = 0.94f + (0.22f * std::pow (velocityNorm, 1.08f));
+    const auto layerMatchGain = juce::jlimit (0.92f, 1.03f, 1.02f - (layerDistance * 0.16f));
+    const auto bankGain = feltBank ? 0.97f
+                                   : (popBank ? 1.015f
+                                              : (hallBank ? 0.995f
+                                                           : (stageBank ? 1.02f
+                                                                        : (noirBank ? 0.985f
+                                                                                     : (glassBank ? 1.03f
+                                                                                                  : (intimateBank ? 0.99f : 1.0f))))));
+    voice.externalSampleGain = bestRegion->gain * dynamicGain * layerMatchGain * bankGain;
     const auto startOffset = juce::jlimit (0,
                                            juce::jmax (0, bestRegion->sample->audio.getNumSamples() - 1),
                                            bestRegion->startOffset);
     voice.externalSamplePosition = static_cast<double> (startOffset);
+}
+
+void AdvancedVSTiAudioProcessor::initializeTr909SampleLibrary()
+{
+    if constexpr (buildFlavor() != InstrumentFlavor::drumMachine)
+        return;
+
+    const auto root = tr909LibraryRoot();
+    const auto contentRoot = findTr909SampleContentRoot (root);
+    if (! contentRoot.isDirectory())
+    {
+        tr909SampleLibrary.reset();
+        return;
+    }
+
+    static std::mutex cacheMutex;
+    static std::map<juce::String, std::weak_ptr<const TR909SampleLibrary>> cachedLibraries;
+
+    const auto cacheKey = contentRoot.getFullPathName();
+    {
+        const std::lock_guard<std::mutex> lock (cacheMutex);
+        if (auto cached = cachedLibraries[cacheKey].lock())
+        {
+            tr909SampleLibrary = std::move (cached);
+            return;
+        }
+    }
+
+    auto library = std::make_shared<TR909SampleLibrary>();
+    library->sourcePath = cacheKey;
+
+    const std::array<std::pair<const char*, DrumVoiceKind>, 11> folders {{
+        { "BassDrum", DrumVoiceKind::kick },
+        { "SnareDrum", DrumVoiceKind::snare },
+        { "RimShot", DrumVoiceKind::rim },
+        { "HandClap", DrumVoiceKind::clap },
+        { "ClosedHat", DrumVoiceKind::closedHat },
+        { "OpenHat", DrumVoiceKind::openHat },
+        { "LowTom", DrumVoiceKind::lowTom },
+        { "MidTom", DrumVoiceKind::midTom },
+        { "HiTom", DrumVoiceKind::highTom },
+        { "Crash", DrumVoiceKind::crash },
+        { "Ride", DrumVoiceKind::ride }
+    }};
+
+    for (const auto& [folderName, kind] : folders)
+    {
+        const auto folder = contentRoot.getChildFile (folderName);
+        if (! folder.isDirectory())
+            continue;
+
+        auto& variants = library->variants[drumVoiceIndex (kind)];
+        for (const auto& sampleFile : findSortedAudioFiles (folder))
+        {
+            const auto lowerName = sampleFile.getFileName().toLowerCase();
+            if (lowerName.contains ("flam")
+                || lowerName.contains ("shuffle")
+                || lowerName.contains ("and-clap")
+                || lowerName.contains ("cut-closedhat"))
+                continue;
+
+            const auto sampleData = loadExternalSampleData (sampleFile,
+                                                            sampleFile.getFileNameWithoutExtension(),
+                                                            "TR-909");
+            if (sampleData == nullptr)
+                continue;
+
+            TR909SampleLibrary::Variant variant;
+            variant.sample = sampleData;
+            variant.accent = taggedSampleValue (lowerName, "accent");
+            variant.tune = taggedSampleValue (lowerName, "tune");
+            variant.attack = taggedSampleValue (lowerName, "attack");
+            variant.decay = taggedSampleValue (lowerName, "decay");
+            variant.tone = taggedSampleValue (lowerName, "tone");
+            variant.snappy = taggedSampleValue (lowerName, "snappy");
+            variant.shot = taggedSampleValue (lowerName, "shot");
+            variants.push_back (std::move (variant));
+        }
+    }
+
+    library->available = false;
+    for (const auto& variants : library->variants)
+    {
+        if (! variants.empty())
+        {
+            library->available = true;
+            break;
+        }
+    }
+
+    tr909SampleLibrary = library->available ? library : std::shared_ptr<const TR909SampleLibrary> {};
+
+    const std::lock_guard<std::mutex> lock (cacheMutex);
+    cachedLibraries[cacheKey] = library;
+}
+
+void AdvancedVSTiAudioProcessor::assignTr909SampleToVoice (VoiceState& voice, int midiNote, float velocity)
+{
+    if constexpr (buildFlavor() != InstrumentFlavor::drumMachine)
+        return;
+
+    voice.externalSample = {};
+    voice.externalSamplePosition = 0.0;
+    voice.externalSampleRootMidi = midiNote;
+    voice.externalSampleGain = 1.0f;
+    voice.externalSampleTuneSemitones = 0.0f;
+    voice.externalSampleLoopStart = 0;
+    voice.externalSampleLoopEnd = 0;
+    voice.externalSampleLoopEnabled = false;
+
+    initializeTr909SampleLibrary();
+
+    const auto library = tr909SampleLibrary;
+    if (library == nullptr || ! library->available)
+        return;
+
+    const auto kind = drumKindForMidi (midiNote);
+    const auto voiceIndex = drumVoiceIndex (kind);
+    if (voiceIndex >= library->variants.size())
+        return;
+
+    const auto& variants = library->variants[voiceIndex];
+    if (variants.empty())
+        return;
+
+    const auto accentTarget = juce::jlimit (0, 100, juce::roundToInt (juce::jlimit (0.0f, 1.0f, velocity) * 100.0f));
+    const auto tuneTarget = juce::jlimit (0, 100, juce::roundToInt (juce::jmap (renderParams.drumVoiceTunes[voiceIndex], -12.0f, 12.0f, 0.0f, 100.0f)));
+    const auto decayTarget = juce::jlimit (0, 100, juce::roundToInt (renderParams.drumVoiceDecays[voiceIndex] * 100.0f));
+    const auto kickAttackTarget = juce::jlimit (0, 100, juce::roundToInt (renderParams.drumKickAttack * 100.0f));
+    const auto snareToneTarget = juce::jlimit (0, 100, juce::roundToInt (renderParams.drumSnareTone * 100.0f));
+    const auto snareSnappyTarget = juce::jlimit (0, 100, juce::roundToInt (renderParams.drumSnareSnappy * 100.0f));
+
+    auto scoreVariant = [&] (const TR909SampleLibrary::Variant& variant) -> float
+    {
+        float score = 0.0f;
+
+        score += 0.18f * std::abs ((variant.accent >= 0 ? variant.accent : 55) - accentTarget);
+
+        switch (kind)
+        {
+            case DrumVoiceKind::kick:
+                score += std::abs ((variant.tune >= 0 ? variant.tune : 50) - tuneTarget) * 1.0f;
+                score += std::abs ((variant.attack >= 0 ? variant.attack : 100) - kickAttackTarget) * 0.85f;
+                score += std::abs ((variant.decay >= 0 ? variant.decay : 100) - decayTarget) * 0.8f;
+                break;
+            case DrumVoiceKind::snare:
+                score += std::abs ((variant.tune >= 0 ? variant.tune : 50) - tuneTarget) * 0.95f;
+                score += std::abs ((variant.tone >= 0 ? variant.tone : 100) - snareToneTarget) * 0.9f;
+                score += std::abs ((variant.snappy >= 0 ? variant.snappy : 100) - snareSnappyTarget) * 0.9f;
+                break;
+            case DrumVoiceKind::closedHat:
+            case DrumVoiceKind::openHat:
+                score += std::abs ((variant.decay >= 0 ? variant.decay : 100) - decayTarget) * 1.0f;
+                break;
+            case DrumVoiceKind::lowTom:
+            case DrumVoiceKind::midTom:
+            case DrumVoiceKind::highTom:
+                score += std::abs ((variant.tune >= 0 ? variant.tune : 50) - tuneTarget) * 0.95f;
+                score += std::abs ((variant.decay >= 0 ? variant.decay : 100) - decayTarget) * 0.85f;
+                break;
+            case DrumVoiceKind::crash:
+            case DrumVoiceKind::ride:
+                score += std::abs ((variant.tune >= 0 ? variant.tune : 50) - tuneTarget) * 0.95f;
+                break;
+            default:
+                if (variant.shot >= 0)
+                    score -= 2.0f;
+                break;
+        }
+
+        return score;
+    };
+
+    const auto bestIt = std::min_element (variants.begin(), variants.end(),
+                                          [&] (const auto& lhs, const auto& rhs)
+                                          {
+                                              return scoreVariant (lhs) < scoreVariant (rhs);
+                                          });
+    if (bestIt == variants.end() || bestIt->sample == nullptr)
+        return;
+
+    voice.externalSample = bestIt->sample;
+    voice.externalSampleRootMidi = midiNote;
+    voice.externalSampleGain = juce::jlimit (0.62f,
+                                             1.28f,
+                                             0.62f + (0.66f * std::pow (juce::jlimit (0.0f, 1.0f, velocity), 1.08f)));
 }
 
 juce::StringArray AdvancedVSTiAudioProcessor::presetNames() const
@@ -2952,14 +3539,31 @@ AdvancedVSTiAudioProcessor::VirusPresetMetadata AdvancedVSTiAudioProcessor::getV
 
 void AdvancedVSTiAudioProcessor::refreshSampleBank()
 {
+    if constexpr (buildFlavor() == InstrumentFlavor::drumMachine)
+    {
+        initializeTr909SampleLibrary();
+        loadedSample.setSize (1, 1);
+        loadedSample.clear();
+        loadedSampleBank = 0;
+        return;
+    }
+
     const auto banks = sampleBankChoices();
     const auto targetBank = juce::jlimit (0, juce::jmax (0, banks.size() - 1), renderParams.sampleBank);
 
     if constexpr (isAcousticFlavor() && buildFlavor() != InstrumentFlavor::piano)
     {
-        initializeAcousticSampleLibrary (targetBank);
+        if (targetBank != loadedAcousticSampleBank)
+        {
+            if (const auto cachedBank = acousticSampleLibrariesByBank.find (targetBank);
+                cachedBank != acousticSampleLibrariesByBank.end() && cachedBank->second != nullptr)
+            {
+                acousticSampleLibrary = cachedBank->second;
+                loadedAcousticSampleBank = targetBank;
+            }
+        }
 
-        if (acousticSampleLibrary != nullptr && acousticSampleLibrary->available)
+        if (acousticSampleLibrary != nullptr && acousticSampleLibrary->available && loadedAcousticSampleBank == targetBank)
         {
             loadedSample.setSize (1, 1);
             loadedSample.clear();
@@ -3069,6 +3673,42 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
                 hall = 0.2f;
                 acousticLengthSec = 6.2f;
                 break;
+            case 4:
+                brightness = 1.34f;
+                decay = 1.05f;
+                hammer = 1.24f;
+                resonance = 0.18f;
+                body = 0.12f;
+                hall = 0.03f;
+                acousticLengthSec = 3.8f;
+                break;
+            case 5:
+                brightness = 0.72f;
+                decay = 1.48f;
+                hammer = 0.68f;
+                resonance = 0.28f;
+                body = 0.28f;
+                hall = 0.07f;
+                acousticLengthSec = 5.1f;
+                break;
+            case 6:
+                brightness = 1.48f;
+                decay = 1.26f;
+                hammer = 1.3f;
+                resonance = 0.14f;
+                body = 0.1f;
+                hall = 0.05f;
+                acousticLengthSec = 4.5f;
+                break;
+            case 7:
+                brightness = 0.9f;
+                decay = 1.02f;
+                hammer = 0.82f;
+                resonance = 0.31f;
+                body = 0.31f;
+                hall = 0.02f;
+                acousticLengthSec = 3.5f;
+                break;
             default:
                 break;
         }
@@ -3125,6 +3765,10 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
         float section = 0.14f;
         float pizzicato = 0.0f;
         float swell = 0.0f;
+        float marcato = 0.0f;
+        float staccato = 0.0f;
+        float harmonics = 0.0f;
+        float colLegno = 0.0f;
         float acousticLengthSec = 5.2f;
 
         switch (bankIndex)
@@ -3152,6 +3796,38 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
                 swell = 1.0f;
                 acousticLengthSec = 6.4f;
                 break;
+            case 4:
+                brightness = 1.06f;
+                bowNoise = 0.12f;
+                vibrato = 0.0026f;
+                section = 0.18f;
+                marcato = 1.0f;
+                acousticLengthSec = 4.4f;
+                break;
+            case 5:
+                brightness = 1.08f;
+                bowNoise = 0.06f;
+                vibrato = 0.0015f;
+                section = 0.1f;
+                staccato = 1.0f;
+                acousticLengthSec = 2.3f;
+                break;
+            case 6:
+                brightness = 1.2f;
+                bowNoise = 0.03f;
+                vibrato = 0.0022f;
+                section = 0.08f;
+                harmonics = 1.0f;
+                acousticLengthSec = 4.8f;
+                break;
+            case 7:
+                brightness = 0.72f;
+                bowNoise = 0.16f;
+                vibrato = 0.0012f;
+                section = 0.16f;
+                colLegno = 1.0f;
+                acousticLengthSec = 2.4f;
+                break;
             default:
                 break;
         }
@@ -3161,11 +3837,14 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
         {
             phaseE = std::fmod (phaseE + ((4.6f + swell * 0.8f) / sampleRateF), 1.0f);
             phaseF = std::fmod (phaseF + (0.42f / sampleRateF), 1.0f);
-            const auto attackTime = pizzicato > 0.5f ? 0.008f : (0.12f + swell * 0.18f);
+            const auto attackTime = staccato > 0.5f ? 0.006f
+                                   : (pizzicato > 0.5f ? 0.008f
+                                                       : (0.12f + swell * 0.18f - marcato * 0.055f));
             const auto attack = juce::jlimit (0.0f, 1.0f, t / attackTime);
             const auto contour = swell > 0.5f ? juce::jlimit (0.0f, 1.0f, t / 0.55f) : attack;
-            const auto release = std::exp (-juce::jmax (0.0f, t - (acousticLengthSec - (pizzicato > 0.5f ? 0.22f : 0.9f)))
-                                           * (pizzicato > 0.5f ? 5.6f : 2.4f));
+            const auto release = std::exp (-juce::jmax (0.0f, t - (acousticLengthSec - (staccato > 0.5f ? 0.3f
+                                                                                         : (pizzicato > 0.5f ? 0.22f : 0.9f))))
+                                           * (staccato > 0.5f ? 4.8f : (pizzicato > 0.5f ? 5.6f : 2.4f)));
             const auto vib = std::sin (twoPi * phaseE) * vibrato * (0.25f + 0.75f * contour);
             phaseA = std::fmod (phaseA + ((196.0f * (1.0f + vib)) / sampleRateF), 1.0f);
             phaseB = std::fmod (phaseB + ((196.0f * 2.01f * (1.0f + vib * 0.55f)) / sampleRateF), 1.0f);
@@ -3178,10 +3857,19 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
                            + (std::sin (twoPi * std::fmod (phaseB - width * 0.007f, 1.0f)) * 0.24f * brightness)
                            + (std::sin (twoPi * std::fmod (phaseC + width * 0.004f, 1.0f)) * 0.13f * brightness)
                            + (std::sin (twoPi * phaseD) * 0.08f * brightness * std::exp (-t * 1.4f));
-            sample += stateA * bowNoise;
-            sample += noise * (pizzicato > 0.5f ? 0.18f : 0.07f) * std::exp (-t * (pizzicato > 0.5f ? 52.0f : 24.0f));
-            sample = smoothTowards (sample, pizzicato > 0.5f ? 0.075f : 0.028f, stateB);
-            return softSaturate (sample * (1.02f + section * 0.08f)) * contour * release;
+            sample += std::sin (twoPi * std::fmod (phaseC * (1.96f + harmonics * 0.04f), 1.0f)) * 0.08f * harmonics;
+            sample += stateA * (bowNoise + colLegno * 0.04f);
+            sample += noise * ((pizzicato > 0.5f || staccato > 0.5f) ? 0.18f : 0.07f)
+                      * std::exp (-t * ((pizzicato > 0.5f || staccato > 0.5f) ? 52.0f : 24.0f));
+            if (marcato > 0.5f)
+                sample += noise * 0.09f * std::exp (-t * 18.0f);
+            if (colLegno > 0.5f)
+                sample = sample * 0.72f + std::sin (twoPi * phaseD) * 0.1f + noise * 0.12f * std::exp (-t * 10.0f);
+            sample = smoothTowards (sample,
+                                    (pizzicato > 0.5f || staccato > 0.5f) ? 0.075f : (harmonics > 0.5f ? 0.02f : 0.028f),
+                                    stateB);
+            return softSaturate (sample * (1.02f + section * 0.08f + marcato * 0.06f + harmonics * 0.03f))
+                   * contour * release;
         });
         return;
     }
@@ -3316,30 +4004,42 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
         float vibrato = 0.0038f;
         float growl = 0.14f;
         float body = 0.1f;
+        float attackNoise = 0.12f;
+        float swellTime = 0.06f;
+        float releaseTail = 2.8f;
         float acousticLengthSec = 4.1f;
 
         switch (bankIndex)
         {
             case 1:
-                brightness = 0.78f;
+                brightness = 0.72f;
                 reed = 0.12f;
-                vibrato = 0.0034f;
-                growl = 0.1f;
-                body = 0.12f;
+                vibrato = 0.0031f;
+                growl = 0.08f;
+                body = 0.18f;
+                attackNoise = 0.08f;
+                swellTime = 0.078f;
+                releaseTail = 2.4f;
                 break;
             case 2:
-                brightness = 0.66f;
-                reed = 0.18f;
-                vibrato = 0.0026f;
-                growl = 0.18f;
-                body = 0.16f;
+                brightness = 1.08f;
+                reed = 0.24f;
+                vibrato = 0.0043f;
+                growl = 0.11f;
+                body = 0.06f;
+                attackNoise = 0.2f;
+                swellTime = 0.045f;
+                releaseTail = 3.15f;
                 break;
             case 3:
                 brightness = 1.12f;
                 reed = 0.22f;
                 vibrato = 0.0046f;
                 growl = 0.28f;
-                body = 0.08f;
+                body = 0.09f;
+                attackNoise = 0.16f;
+                swellTime = 0.052f;
+                releaseTail = 3.0f;
                 break;
             default:
                 break;
@@ -3349,8 +4049,8 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
                                                     float& phaseE, float& phaseF, float& stateA, float& stateB)
         {
             juce::ignoreUnused (stateB);
-            const auto swell = juce::jlimit (0.0f, 1.0f, t / 0.06f);
-            const auto release = std::exp (-juce::jmax (0.0f, t - (acousticLengthSec - 0.6f)) * 2.8f);
+            const auto swell = juce::jlimit (0.0f, 1.0f, t / swellTime);
+            const auto release = std::exp (-juce::jmax (0.0f, t - (acousticLengthSec - 0.6f)) * releaseTail);
             phaseE = std::fmod (phaseE + (5.0f / sampleRateF), 1.0f);
             phaseF = std::fmod (phaseF + (110.0f / sampleRateF), 1.0f);
             const auto vib = std::sin (twoPi * phaseE) * vibrato * (0.2f + 0.8f * swell);
@@ -3368,7 +4068,7 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
             sample += growlWave * growl * 0.18f;
             sample += stateA * reed;
             sample += std::sin (twoPi * phaseF) * body * 0.12f;
-            sample += noise * 0.12f * std::exp (-t * 28.0f);
+            sample += noise * attackNoise * std::exp (-t * 28.0f);
             return softSaturate (sample * 1.08f) * swell * release;
         });
         return;
@@ -3438,39 +4138,42 @@ void AdvancedVSTiAudioProcessor::buildGeneratedSampleBank (int bankIndex)
 
     if constexpr (buildFlavor() == InstrumentFlavor::organ)
     {
-        float h2 = 0.62f;
-        float h3 = 0.36f;
-        float h4 = 0.18f;
-        float h5 = 0.08f;
-        float click = 0.08f;
-        float chorus = 0.02f;
-        float acousticLengthSec = 4.6f;
+        float h2 = 0.66f;
+        float h3 = 0.4f;
+        float h4 = 0.16f;
+        float h5 = 0.06f;
+        float click = 0.05f;
+        float chorus = 0.018f;
+        float acousticLengthSec = 5.0f;
 
         switch (bankIndex)
         {
             case 1:
-                h2 = 0.48f;
-                h3 = 0.28f;
-                h4 = 0.1f;
-                h5 = 0.04f;
-                click = 0.05f;
-                chorus = 0.018f;
+                h2 = 0.4f;
+                h3 = 0.18f;
+                h4 = 0.04f;
+                h5 = 0.02f;
+                click = 0.03f;
+                chorus = 0.04f;
+                acousticLengthSec = 4.9f;
                 break;
             case 2:
-                h2 = 0.74f;
-                h3 = 0.52f;
-                h4 = 0.26f;
-                h5 = 0.12f;
-                click = 0.11f;
-                chorus = 0.015f;
+                h2 = 0.82f;
+                h3 = 0.64f;
+                h4 = 0.42f;
+                h5 = 0.22f;
+                click = 0.13f;
+                chorus = 0.012f;
+                acousticLengthSec = 3.8f;
                 break;
             case 3:
-                h2 = 0.56f;
-                h3 = 0.31f;
-                h4 = 0.14f;
-                h5 = 0.06f;
-                click = 0.06f;
-                chorus = 0.03f;
+                h2 = 0.54f;
+                h3 = 0.27f;
+                h4 = 0.08f;
+                h5 = 0.04f;
+                click = 0.04f;
+                chorus = 0.05f;
+                acousticLengthSec = 5.1f;
                 break;
             default:
                 break;
@@ -3643,32 +4346,81 @@ void AdvancedVSTiAudioProcessor::resetArpState()
 void AdvancedVSTiAudioProcessor::startVoiceForMidiNote (int midiNote, float velocity, int externalPadIndex, bool isArpControlled)
 {
     const auto polyphonyLimit = activeVoiceLimit();
+    const auto renderVoiceLimit = [&] () -> int
+    {
+        if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
+            return voiceLimitForFlavor();
+        return polyphonyLimit;
+    }();
     int voiceIndex = 0;
     bool foundVoice = false;
     float oldestVoiceAge = -1.0f;
     float glideStartNote = static_cast<float> (midiNote);
-
-    const bool allowPortamento = buildFlavor() == InstrumentFlavor::advanced
-                                 && renderParams.monoEnabled
-                                 && renderParams.portamentoTime > 0.0001f;
+    int activeMonophonicVoiceIndex = -1;
 
     if constexpr (isMonophonicFlavor())
     {
-        heldNotes.clear();
-        for (auto& activeVoice : voices)
+        for (int i = 0; i < polyphonyLimit; ++i)
         {
-            if (! activeVoice.active)
-                continue;
-
-            activeVoice.active = false;
-            activeVoice.arpControlled = false;
-            activeVoice.ampEnv.reset();
-            activeVoice.filterEnv.reset();
+            if (voices[static_cast<size_t> (i)].active)
+            {
+                activeMonophonicVoiceIndex = i;
+                break;
+            }
         }
+    }
+
+    const bool allowPortamento = ((buildFlavor() == InstrumentFlavor::advanced && renderParams.monoEnabled)
+                                  || (buildFlavor() == InstrumentFlavor::bassSynth && heldNotes.size() > 1))
+                                 && renderParams.portamentoTime > 0.0001f;
+    const bool reuseBassVoiceLegato = buildFlavor() == InstrumentFlavor::bassSynth
+                                      && allowPortamento
+                                      && activeMonophonicVoiceIndex >= 0;
+
+    if constexpr (isMonophonicFlavor())
+    {
+        if constexpr (buildFlavor() != InstrumentFlavor::bassSynth)
+            heldNotes.clear();
+
+        if (! reuseBassVoiceLegato)
+        {
+            for (auto& activeVoice : voices)
+            {
+                if (! activeVoice.active)
+                    continue;
+
+                if constexpr (buildFlavor() == InstrumentFlavor::saxophone
+                              || buildFlavor() == InstrumentFlavor::flute
+                              || buildFlavor() == InstrumentFlavor::bassGuitar)
+                {
+                    const auto fadeSamples = juce::jlimit (32, 256, juce::roundToInt (currentSampleRate * 0.0035));
+                    activeVoice.arpControlled = false;
+                    activeVoice.midiNote = -1;
+                    activeVoice.forcedFadeSamplesRemaining = juce::jmax (activeVoice.forcedFadeSamplesRemaining, fadeSamples);
+                    activeVoice.forcedFadeSamplesTotal = juce::jmax (activeVoice.forcedFadeSamplesTotal, fadeSamples);
+                }
+                else
+                {
+                    activeVoice.active = false;
+                    activeVoice.arpControlled = false;
+                    activeVoice.ampEnv.reset();
+                    activeVoice.filterEnv.reset();
+                }
+            }
+        }
+    }
+
+    if (reuseBassVoiceLegato)
+    {
+        voiceIndex = activeMonophonicVoiceIndex;
+        foundVoice = true;
     }
 
     for (int i = 0; i < polyphonyLimit; ++i)
     {
+        if (reuseBassVoiceLegato)
+            break;
+
         auto& candidate = voices[static_cast<size_t> (i)];
         if (! candidate.active)
         {
@@ -3684,6 +4436,29 @@ void AdvancedVSTiAudioProcessor::startVoiceForMidiNote (int midiNote, float velo
         }
     }
 
+    if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
+    {
+        if (! reuseBassVoiceLegato && ! foundVoice)
+        {
+            for (int i = polyphonyLimit; i < renderVoiceLimit; ++i)
+            {
+                auto& candidate = voices[static_cast<size_t> (i)];
+                if (! candidate.active)
+                {
+                    voiceIndex = i;
+                    foundVoice = true;
+                    break;
+                }
+
+                if (candidate.noteAge > oldestVoiceAge)
+                {
+                    oldestVoiceAge = candidate.noteAge;
+                    voiceIndex = i;
+                }
+            }
+        }
+    }
+
     auto& voice = voices[static_cast<size_t> (voiceIndex)];
     if (allowPortamento && voice.active)
     {
@@ -3691,10 +4466,22 @@ void AdvancedVSTiAudioProcessor::startVoiceForMidiNote (int midiNote, float velo
                                                        : static_cast<float> (voice.midiNote);
     }
 
-    if (! foundVoice && voice.active)
+    if (! reuseBassVoiceLegato && ! foundVoice && voice.active)
     {
         voice.ampEnv.reset();
         voice.filterEnv.reset();
+    }
+
+    if (reuseBassVoiceLegato && voice.active)
+    {
+        voice.arpControlled = isArpControlled;
+        voice.midiNote = midiNote;
+        voice.currentMidiNote = glideStartNote;
+        voice.targetMidiNote = static_cast<float> (midiNote);
+        voice.velocity = velocity;
+        voice.noteAge = 0.0f;
+        voice.articulationState = 1.0f;
+        return;
     }
 
     voice.active = true;
@@ -3714,6 +4501,8 @@ void AdvancedVSTiAudioProcessor::startVoiceForMidiNote (int midiNote, float velo
     voice.toneState = 0.0f;
     voice.colourState = 0.0f;
     voice.articulationState = 0.0f;
+    if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
+        voice.articulationState = 1.0f;
     if constexpr (isAcousticFlavor())
     {
         const auto seedA = 0.5f + (0.5f * std::sin ((static_cast<float> (midiNote) * 0.713f) + (velocity * 3.91f)));
@@ -3731,10 +4520,14 @@ void AdvancedVSTiAudioProcessor::startVoiceForMidiNote (int midiNote, float velo
     voice.externalSampleLoopStart = 0;
     voice.externalSampleLoopEnd = 0;
     voice.externalSampleLoopEnabled = false;
+    voice.forcedFadeSamplesRemaining = 0;
+    voice.forcedFadeSamplesTotal = 0;
     voice.externalSample = (externalPadIndex >= 0 && juce::isPositiveAndBelow (externalPadIndex, vecPadCount))
                                ? std::atomic_load (&externalPadSamples[static_cast<size_t> (externalPadIndex)])
                                : std::shared_ptr<const ExternalSampleData> {};
-    if constexpr (buildFlavor() == InstrumentFlavor::piano)
+    if constexpr (buildFlavor() == InstrumentFlavor::drumMachine)
+        assignTr909SampleToVoice (voice, midiNote, velocity);
+    else if constexpr (buildFlavor() == InstrumentFlavor::piano)
         assignPianoSampleToVoice (voice, midiNote, velocity);
     else if constexpr (isAcousticFlavor())
     {
@@ -3965,6 +4758,7 @@ void AdvancedVSTiAudioProcessor::handleMidiMessage (const juce::MidiMessage& msg
 
         if constexpr (! isDrumFlavor())
         {
+            heldNoteVelocities[static_cast<size_t> (juce::jlimit (0, 127, msg.getNoteNumber()))] = msg.getFloatVelocity();
             heldNotes.addIfNotAlreadyThere (msg.getNoteNumber());
 
             if (renderParams.arpEnabled)
@@ -4017,6 +4811,7 @@ void AdvancedVSTiAudioProcessor::handleMidiMessage (const juce::MidiMessage& msg
         if (keepLatchedForArp)
             return;
 
+        heldNoteVelocities[static_cast<size_t> (juce::jlimit (0, 127, note))] = 0.0f;
         heldNotes.removeAllInstancesOf (note);
         if (renderParams.arpEnabled)
         {
@@ -4026,6 +4821,30 @@ void AdvancedVSTiAudioProcessor::handleMidiMessage (const juce::MidiMessage& msg
                 resetArpState();
             }
             return;
+        }
+
+        if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
+        {
+            if (! heldNotes.isEmpty())
+            {
+                const auto resumedNote = heldNotes.getLast();
+                const auto resumedVelocity = juce::jlimit (0.0f, 1.0f, heldNoteVelocities[static_cast<size_t> (juce::jlimit (0, 127, resumedNote))]);
+
+                for (auto& voice : voices)
+                {
+                    if (! voice.active)
+                        continue;
+
+                    voice.midiNote = resumedNote;
+                    voice.targetMidiNote = static_cast<float> (resumedNote);
+                    if (renderParams.portamentoTime <= 0.0001f)
+                        voice.currentMidiNote = static_cast<float> (resumedNote);
+                    voice.velocity = resumedVelocity > 0.0f ? resumedVelocity : voice.velocity;
+                    voice.noteAge = 0.0f;
+                    voice.articulationState = 1.0f;
+                    return;
+                }
+            }
         }
 
         for (auto& voice : voices)
@@ -4169,6 +4988,7 @@ void AdvancedVSTiAudioProcessor::applyPendingUiActions (juce::MidiBuffer& midiMe
     auto releaseAllNotes = [this] (bool hardKill)
     {
         heldNotes.clear();
+        heldNoteVelocities.fill (0.0f);
         resetArpState();
         keyboardState.reset();
 
@@ -4473,6 +5293,73 @@ float AdvancedVSTiAudioProcessor::renderDrumVoiceSample (VoiceState& voice)
     return output * voice.velocity * renderParams.drumVoiceLevels[voiceIndex] * renderParams.drumMasterLevel;
 }
 
+float AdvancedVSTiAudioProcessor::renderTr909VoiceSample (VoiceState& voice)
+{
+    if (! voice.active)
+        return 0.0f;
+
+    const auto sampleData = voice.externalSample;
+    if (sampleData == nullptr || sampleData->audio.getNumSamples() <= 0)
+    {
+        voice.active = false;
+        return 0.0f;
+    }
+
+    const auto totalSamples = sampleData->audio.getNumSamples();
+    if (voice.externalSamplePosition >= static_cast<double> (totalSamples))
+    {
+        voice.active = false;
+        return 0.0f;
+    }
+
+    const auto indexA = juce::jlimit (0, totalSamples - 1, static_cast<int> (voice.externalSamplePosition));
+    const auto indexB = juce::jmin (totalSamples - 1, indexA + 1);
+    const auto alpha = static_cast<float> (voice.externalSamplePosition - static_cast<double> (indexA));
+    const auto sampleA = sampleData->audio.getSample (0, indexA);
+    const auto sampleB = sampleData->audio.getSample (0, indexB);
+
+    auto output = juce::jmap (alpha, sampleA, sampleB);
+    const auto tailFadeSamples = juce::jlimit (16, 192, totalSamples / 32);
+    const auto samplesRemaining = static_cast<double> (totalSamples) - voice.externalSamplePosition;
+    if (samplesRemaining <= static_cast<double> (tailFadeSamples))
+        output *= juce::jlimit (0.0f, 1.0f, static_cast<float> (samplesRemaining / static_cast<double> (tailFadeSamples)));
+
+    const auto kind = drumKindForMidi (voice.midiNote);
+    const auto voiceIndex = drumVoiceIndex (kind);
+
+    switch (renderParams.presetIndex)
+    {
+        case 1:
+        {
+            const auto body = smoothTowards (output, 0.11f, voice.toneState);
+            const auto edge = output - body;
+            output = (body * 0.94f) + (edge * 1.28f);
+            output = softSaturate (output * 1.16f) * 0.97f;
+            break;
+        }
+        case 2:
+        {
+            const auto body = smoothTowards (output, 0.045f, voice.toneState);
+            const auto edge = output - body;
+            const auto dust = (random.nextFloat() * 2.0f - 1.0f) * 0.0026f * std::exp (-voice.noteAge * 7.0f);
+            output = ((body * 1.14f) + (edge * 0.58f) + dust) * 0.96f;
+            break;
+        }
+        default:
+            output *= 0.98f;
+            break;
+    }
+
+    const auto increment = juce::jlimit (0.125, 8.0, sampleData->sampleRate / currentSampleRate);
+    voice.externalSamplePosition += increment;
+    voice.noteAge += 1.0f / static_cast<float> (currentSampleRate);
+
+    if (voice.externalSamplePosition >= static_cast<double> (totalSamples))
+        voice.active = false;
+
+    return output * voice.externalSampleGain * renderParams.drumVoiceLevels[voiceIndex] * renderParams.drumMasterLevel;
+}
+
 float AdvancedVSTiAudioProcessor::renderExternalPadVoiceSample (VoiceState& voice)
 {
     if (! voice.active)
@@ -4627,7 +5514,11 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         return renderExternalPadVoiceSample (voice);
 
     if constexpr (isSynthDrumFlavor())
+    {
+        if (voice.externalSample != nullptr)
+            return renderTr909VoiceSample (voice);
         return renderDrumVoiceSample (voice);
+    }
 
     const auto& params = renderParams;
 
@@ -4815,19 +5706,19 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
     float multisamplePitchSemitones = voiceMod.osc1Pitch;
     if constexpr (buildFlavor() == InstrumentFlavor::saxophone)
     {
-        const auto tenorBank = params.sampleBank == 1;
-        const auto bariBank = params.sampleBank == 2;
+        const auto warmBank = params.sampleBank == 1;
+        const auto airyBank = params.sampleBank == 2;
         const auto jazzBank = params.sampleBank == 3;
         const auto vibratoMacro = std::sqrt (juce::jlimit (0.0f, 1.0f, params.lfo1Pitch / 24.0f));
-        const auto vibratoRate = jazzBank ? 5.6f : (bariBank ? 4.5f : (tenorBank ? 4.9f : 5.2f));
+        const auto vibratoRate = jazzBank ? 5.6f : (airyBank ? 5.35f : (warmBank ? 4.6f : 5.0f));
         const auto vibratoRamp = std::pow (juce::jlimit (0.0f,
                                                          1.0f,
                                                          (voice.noteAge - (jazzBank ? 0.04f : 0.08f))
-                                                             / (tenorBank ? 0.28f : 0.24f)),
+                                                             / (warmBank ? 0.34f : (airyBank ? 0.22f : 0.28f))),
                                            1.2f);
         const auto vibratoPhase = std::fmod (voice.auxPhase + (voice.noteAge * vibratoRate), 1.0f);
         const auto sampleVibratoSemitones = std::sin (twoPi * vibratoPhase)
-                                            * juce::jmap (vibratoMacro, 0.0f, 0.58f)
+                                            * juce::jmap (vibratoMacro, 0.0f, airyBank ? 0.62f : (warmBank ? 0.42f : 0.58f))
                                             * vibratoRamp;
         multisamplePitchSemitones = sampleVibratoSemitones + (voiceMod.osc1Pitch * 0.08f);
     }
@@ -4851,7 +5742,12 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
     else
     {
         const auto fm = fmOperator (voice, baseHz, juce::jmax (0.0f, params.fmAmount + voiceMod.fmAmount));
-        const auto osc1Shape = juce::jlimit (0.05f, 0.95f, params.osc1PulseWidth + voiceMod.pulseWidth + voiceMod.shape);
+        auto osc1Shape = juce::jlimit (0.05f, 0.95f, params.osc1PulseWidth + voiceMod.pulseWidth + voiceMod.shape);
+        if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
+        {
+            if (params.oscType == OscType::square)
+                osc1Shape = juce::jlimit (0.18f, 0.82f, bassSquarePulseWidthForMidiNote (soundingMidiNote) + voiceMod.pulseWidth + voiceMod.shape * 0.5f);
+        }
 
         for (int i = 0; i < params.unisonVoices; ++i)
         {
@@ -4875,14 +5771,56 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
 
     if constexpr (buildFlavor() == InstrumentFlavor::bassSynth)
     {
+        const auto accentControl = bassAccentControlAmount (params.fmAmount);
+        const auto accentTrigger = bassAccentTriggerAmount (voice.velocity);
+        const auto accentAmount = accentControl * accentTrigger;
+        const auto accentDecayCoeff = std::exp (-1.0f / juce::jmax (1.0f, static_cast<float> (currentSampleRate) * (0.028f + accentControl * 0.035f)));
+        const auto accentTransient = accentAmount * voice.articulationState;
+        voice.articulationState *= accentDecayCoeff;
+
+        const auto bassProfile = params.presetIndex == 1 ? 1.0f
+                                                         : (params.presetIndex == 2 ? 0.94f
+                                                                                    : (params.presetIndex == 3 ? 0.36f : 0.08f));
+        const auto accentContour = accentAmount * (0.34f + (0.66f * voice.articulationState));
+        const auto slideFeel = juce::jlimit (0.0f, 1.0f, params.portamentoTime / 0.17f) * (0.45f + bassProfile * 0.55f);
+
+        sampleModSums.cutoff1 += accentContour * (700.0f + bassProfile * 3600.0f);
+        sampleModSums.filterEnvAmount += accentContour * (0.06f + bassProfile * 0.34f);
+        sampleModSums.resonance += accentContour * (0.03f + bassProfile * 0.17f);
+        voiceMod.ampLevel += accentContour * (0.1f + bassProfile * 0.52f);
+
         voice.auxPhase = std::fmod (voice.auxPhase + (baseHz * 0.5f) / static_cast<float> (currentSampleRate), 1.0f);
         const auto sub = std::sin (twoPi * voice.auxPhase);
         const auto squareSub = voice.auxPhase < 0.5f ? 1.0f : -1.0f;
-        s = (s * 0.76f) + (sub * 0.18f) + (squareSub * 0.08f);
-        s = smoothTowards (s, 0.11f, voice.toneState);
-        s = softSaturate (s * 1.18f) * 0.9f;
+        if (bassProfile > 0.1f)
+        {
+            const auto transient = s - smoothTowards (s,
+                                                      juce::jlimit (0.02f, 0.12f, 0.082f - accentTransient * 0.05f),
+                                                      voice.colourState);
+            const auto body = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + 0.09f + slideFeel * 0.04f, 1.0f))
+                              * (0.025f + bassProfile * 0.05f + slideFeel * 0.015f);
+            const auto harmonic = std::sin (twoPi * std::fmod ((voice.phase * (params.oscType == OscType::square ? 2.98f : 1.98f)) + 0.18f, 1.0f))
+                                  * (0.02f + bassProfile * 0.035f + accentContour * 0.1f);
+            s = (s * (0.8f + bassProfile * 0.12f))
+                + (sub * juce::jmap (bassProfile, 0.16f, 0.06f))
+                + (squareSub * juce::jmap (bassProfile, 0.06f, 0.015f))
+                + (transient * (0.12f + bassProfile * 0.16f + accentContour * 0.34f))
+                + body
+                + harmonic;
+            s = smoothTowards (s,
+                               juce::jlimit (0.018f, 0.08f, 0.055f - accentTransient * 0.022f),
+                               voice.toneState);
+            s = softSaturate (s * (1.12f + bassProfile * 0.08f + accentContour * 0.22f)) * 0.92f;
+        }
+        else
+        {
+            s = (s * 0.76f) + (sub * 0.18f) + (squareSub * 0.08f);
+            s = smoothTowards (s, 0.11f, voice.toneState);
+            s = softSaturate (s * 1.18f) * 0.9f;
+        }
     }
-    else if constexpr (buildFlavor() == InstrumentFlavor::leadSynth)
+
+    if constexpr (buildFlavor() == InstrumentFlavor::leadSynth)
     {
         voice.auxPhase = std::fmod (voice.auxPhase + 4.6f / static_cast<float> (currentSampleRate), 1.0f);
         const auto vibrato = std::sin (twoPi * voice.auxPhase) * 0.006f;
@@ -4919,79 +5857,314 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::piano)
     {
-        voice.auxPhase = std::fmod (voice.auxPhase + (5.2f / static_cast<float> (currentSampleRate)), 1.0f);
+        const auto feltBank = params.sampleBank == 1;
+        const auto popBank = params.sampleBank == 2;
+        const auto hallBank = params.sampleBank == 3;
+        const auto stageBank = params.sampleBank == 4;
+        const auto noirBank = params.sampleBank == 5;
+        const auto glassBank = params.sampleBank == 6;
+        const auto intimateBank = params.sampleBank == 7;
+        const auto toneMacro = normalizedLogValue (params.cutoff, 900.0f, 18000.0f);
+        const auto sourceBlend = juce::jlimit (0.0f, 1.0f, params.sourceBlend);
+        const auto velocityCurve = std::pow (juce::jlimit (0.0f, 1.0f, voice.velocity),
+                                             feltBank ? 1.16f
+                                                      : (popBank || stageBank || glassBank ? 0.78f
+                                                                                           : (noirBank ? 1.08f : 0.9f)));
+        const auto pianoMotionRate = popBank ? 6.2f
+                                             : (hallBank ? 4.3f
+                                                         : (feltBank ? 4.0f
+                                                                     : (stageBank ? 6.9f
+                                                                                  : (glassBank ? 7.4f
+                                                                                               : (intimateBank ? 3.8f
+                                                                                                                : (noirBank ? 4.6f : 5.1f))))));
+        voice.auxPhase = std::fmod (voice.auxPhase + (pianoMotionRate / static_cast<float> (currentSampleRate)), 1.0f);
         if (useInstrumentMultisample)
         {
-            const auto body = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + (voice.auxPhase * 0.02f), 1.0f))
-                              * (0.018f + voice.velocity * 0.01f) * std::exp (-voice.noteAge * 1.6f);
-            const auto air = smoothTowards (s, 0.015f, voice.colourState) * 0.04f;
-            s = smoothTowards ((s * 0.98f) + body + air, 0.02f, voice.toneState);
-            s = softSaturate (s * (1.0f + voice.velocity * 0.04f)) * 0.985f;
+            const auto rawSample = s;
+            const auto bodyTrack = smoothTowards (s,
+                                                  feltBank ? 0.14f
+                                                           : (popBank ? 0.03f
+                                                                      : (hallBank ? 0.095f
+                                                                                   : (stageBank ? 0.022f
+                                                                                                : (glassBank ? 0.018f
+                                                                                                             : (noirBank ? 0.12f
+                                                                                                                          : (intimateBank ? 0.11f : 0.06f)))))),
+                                                  voice.articulationState);
+            const auto edge = s - bodyTrack;
+            const auto hammer = ((random.nextFloat() * 2.0f - 1.0f) + (voice.colourState * 18.0f))
+                                * ((feltBank ? 0.01f : (noirBank ? 0.012f : 0.016f))
+                                   + velocityCurve * (popBank ? 0.07f
+                                                              : (stageBank ? 0.076f
+                                                                           : (glassBank ? 0.082f
+                                                                                        : (intimateBank ? 0.036f : 0.045f)))))
+                                * std::exp (-voice.noteAge * (popBank ? 84.0f
+                                                                      : (stageBank ? 92.0f
+                                                                                   : (glassBank ? 104.0f
+                                                                                                : (feltBank ? 46.0f
+                                                                                                             : (intimateBank ? 52.0f : 60.0f))))));
+            const auto body = std::sin (twoPi * std::fmod ((voice.phase * (hallBank ? 0.46f : (intimateBank ? 0.43f : 0.5f)))
+                                                           + (voice.auxPhase * (popBank || stageBank || glassBank ? 0.03f : 0.02f))
+                                                           + (voice.colourState * 0.35f),
+                                                          1.0f))
+                              * ((feltBank ? 0.03f : (intimateBank ? 0.038f : (noirBank ? 0.034f : 0.022f)))
+                                 + (hallBank ? 0.018f : 0.0f))
+                              * std::exp (-voice.noteAge * (hallBank ? 1.05f : (intimateBank ? 1.28f : 1.65f)));
+            const auto sympathetic = std::sin (twoPi * std::fmod ((voice.phase * (1.48f + velocityCurve * 0.18f))
+                                                                  + (voice.auxPhase * 0.06f)
+                                                                  + (voice.colourState * 0.8f),
+                                                                 1.0f))
+                                     * ((hallBank ? 0.05f : (intimateBank ? 0.032f : (noirBank ? 0.036f : 0.026f)))
+                                        + velocityCurve * (glassBank ? 0.017f : 0.012f))
+                                     * std::exp (-voice.noteAge * (hallBank ? 0.92f : (noirBank ? 1.18f : 1.5f)));
+            const auto air = edge
+                             * ((feltBank ? 0.06f
+                                          : (popBank ? 0.2f
+                                                     : (stageBank ? 0.23f
+                                                                  : (glassBank ? 0.26f
+                                                                               : (intimateBank ? 0.09f
+                                                                                                : (noirBank ? 0.08f : 0.13f))))))
+                                + velocityCurve * (glassBank ? 0.07f : 0.05f))
+                             * std::exp (-voice.noteAge * (popBank ? 26.0f
+                                                                   : (stageBank ? 30.0f
+                                                                                : (glassBank ? 34.0f
+                                                                                             : (intimateBank ? 16.0f : 18.0f)))));
+            const auto releaseBloom = releaseHint * (hallBank ? 0.11f
+                                                              : (feltBank ? 0.025f
+                                                                          : (stageBank ? 0.045f
+                                                                                       : (glassBank ? 0.05f
+                                                                                                    : (intimateBank ? 0.07f
+                                                                                                                     : (noirBank ? 0.09f : 0.055f))))));
+            const auto bodyResonance = (body * (feltBank ? 0.34f
+                                                         : (hallBank ? 0.68f
+                                                                     : (intimateBank ? 0.55f
+                                                                                      : (noirBank ? 0.52f : 0.26f)))))
+                                       + (sympathetic * (hallBank ? 0.82f
+                                                                  : (glassBank ? 0.44f
+                                                                               : (stageBank ? 0.22f
+                                                                                            : (feltBank ? 0.32f : 0.48f)))));
+            const auto edgeWeight = feltBank ? 0.18f
+                                             : (popBank ? 1.18f
+                                                        : (stageBank ? 1.38f
+                                                                     : (glassBank ? 1.24f
+                                                                                  : (noirBank ? 0.32f
+                                                                                               : (intimateBank ? 0.42f : 0.62f)))));
+            const auto hammerWeight = feltBank ? 0.38f
+                                               : (popBank ? 1.12f
+                                                          : (stageBank ? 1.22f
+                                                                       : (glassBank ? 1.06f
+                                                                                    : (noirBank ? 0.34f
+                                                                                                 : (intimateBank ? 0.46f : 0.72f)))));
+            const auto attackEdge = ((edge * edgeWeight) + (hammer * hammerWeight))
+                                    * (0.92f + toneMacro * 0.1f);
+            const auto spaceLift = (releaseBloom * (hallBank ? 1.22f
+                                                              : (intimateBank ? 0.34f
+                                                                              : (stageBank ? 0.24f
+                                                                                           : (glassBank ? 0.52f : 0.46f)))))
+                                   + (air * (glassBank ? 1.22f
+                                                      : (stageBank ? 1.08f
+                                                                   : (popBank ? 0.88f
+                                                                              : (feltBank ? 0.22f
+                                                                                           : (noirBank ? 0.28f
+                                                                                                        : (intimateBank ? 0.3f : 0.54f)))))));
+
+            auto sourceMix = (bodyTrack * 1.06f) + bodyResonance + attackEdge + spaceLift;
+            auto responseRate = 0.019f;
+            auto sourceDrive = 1.0f;
+            auto outputTrim = 0.992f;
+
+            if (feltBank)
+            {
+                sourceMix = (bodyTrack * 1.34f) + (bodyResonance * 1.08f) + (attackEdge * 0.46f) + (spaceLift * 0.22f);
+                responseRate = 0.034f;
+                sourceDrive = 0.982f;
+                outputTrim = 0.992f;
+            }
+            else if (popBank)
+            {
+                sourceMix = (bodyTrack * 0.86f) + (bodyResonance * 0.58f) + (attackEdge * 1.26f) + (spaceLift * 0.44f);
+                responseRate = 0.011f;
+                sourceDrive = 1.035f + velocityCurve * 0.08f;
+                outputTrim = 0.988f;
+            }
+            else if (hallBank)
+            {
+                sourceMix = (bodyTrack * 1.18f) + (bodyResonance * 1.38f) + (attackEdge * 0.64f) + (spaceLift * 1.3f);
+                responseRate = 0.027f;
+                sourceDrive = 1.0f;
+                outputTrim = 0.996f;
+            }
+            else if (stageBank)
+            {
+                sourceMix = (bodyTrack * 0.82f) + (bodyResonance * 0.42f) + (attackEdge * 1.42f) + (spaceLift * 0.34f);
+                responseRate = 0.009f;
+                sourceDrive = 1.05f + velocityCurve * 0.11f;
+                outputTrim = 0.986f;
+            }
+            else if (noirBank)
+            {
+                sourceMix = (bodyTrack * 1.28f) + (bodyResonance * 1.08f) + (attackEdge * 0.28f) + (spaceLift * 0.3f);
+                responseRate = 0.031f;
+                sourceDrive = 0.988f;
+                outputTrim = 0.994f;
+            }
+            else if (glassBank)
+            {
+                sourceMix = (bodyTrack * 0.78f) + (bodyResonance * 0.48f) + (attackEdge * 1.22f) + (spaceLift * 1.02f);
+                responseRate = 0.008f;
+                sourceDrive = 1.042f + velocityCurve * 0.12f;
+                outputTrim = 0.985f;
+            }
+            else if (intimateBank)
+            {
+                sourceMix = (bodyTrack * 1.26f) + (bodyResonance * 0.94f) + (attackEdge * 0.4f) + (spaceLift * 0.24f);
+                responseRate = 0.028f;
+                sourceDrive = 0.992f;
+                outputTrim = 0.993f;
+            }
+
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.008f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim;
         }
         else
         {
-            const auto hammer = (random.nextFloat() * 2.0f - 1.0f) * 0.06f * std::exp (-voice.noteAge * 72.0f);
-            const auto body = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + (voice.auxPhase * 0.03f), 1.0f))
-                              * (0.08f + voice.velocity * 0.04f) * std::exp (-voice.noteAge * 1.9f);
-            s = smoothTowards ((s * 0.9f) + body + hammer, 0.055f, voice.toneState);
-            s = softSaturate (s * (1.04f + voice.velocity * 0.12f)) * 0.94f;
+            const auto rawSample = s;
+            const auto hammer = (random.nextFloat() * 2.0f - 1.0f)
+                                * ((feltBank || noirBank) ? 0.032f : 0.06f)
+                                * std::exp (-voice.noteAge * (stageBank || glassBank ? 88.0f : 72.0f));
+            const auto body = std::sin (twoPi * std::fmod ((voice.phase * (intimateBank ? 0.42f : 0.5f)) + (voice.auxPhase * 0.03f), 1.0f))
+                              * ((feltBank || noirBank) ? 0.11f : (hallBank ? 0.13f : 0.08f) + voice.velocity * 0.04f)
+                              * std::exp (-voice.noteAge * (hallBank ? 1.2f : 1.9f));
+            const auto sourceMix = (rawSample * (feltBank || noirBank ? 0.94f : 0.9f)) + body + hammer;
+            const auto responseRate = feltBank || noirBank ? 0.07f : 0.055f;
+            const auto sourceDrive = (stageBank || glassBank) ? (1.08f + voice.velocity * 0.18f)
+                                                               : (1.04f + voice.velocity * 0.12f);
+            const auto outputTrim = feltBank ? 0.97f : 0.94f;
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.012f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
     {
-        const auto isLushBank = params.sampleBank == 1;
-        const auto isPizzicatoBank = params.sampleBank == 2;
-        const auto isCinematicBank = params.sampleBank == 3;
-        const auto attackBlend = juce::jlimit (0.0f, 1.0f, voice.noteAge / (isPizzicatoBank ? 0.012f : (isCinematicBank ? 0.22f : 0.085f)));
-        const auto vibratoRamp = isPizzicatoBank ? 0.0f
+        const auto isLushBank = params.sampleBank == 0;
+        const auto isPizzicatoBank = params.sampleBank == 1;
+        const auto isCinematicBank = params.sampleBank == 2;
+        const auto isHarmonicBank = params.sampleBank == 3;
+        const auto isColLegnoBank = params.sampleBank == 4;
+        const auto sourceBlend = juce::jlimit (0.0f, 1.0f, params.sourceBlend);
+        const auto shortArticulationBank = isPizzicatoBank || isColLegnoBank;
+        const auto attackBlend = juce::jlimit (0.0f,
+                                               1.0f,
+                                               voice.noteAge / (isColLegnoBank ? 0.006f
+                                                                               : (isPizzicatoBank ? 0.012f
+                                                                                                  : (isCinematicBank ? 0.22f
+                                                                                                                     : (isHarmonicBank ? 0.14f : 0.085f)))));
+        const auto vibratoRamp = shortArticulationBank ? 0.0f
                                                  : std::pow (juce::jlimit (0.0f,
                                                                            1.0f,
-                                                                           (voice.noteAge - (isLushBank ? 0.08f : 0.11f))
-                                                                               / (isCinematicBank ? 0.6f : 0.34f)),
+                                                                           (voice.noteAge - (isLushBank ? 0.08f : (isHarmonicBank ? 0.05f : 0.11f)))
+                                                                               / (isCinematicBank ? 0.6f : (isHarmonicBank ? 0.24f : 0.34f))),
                                                              1.35f);
-        voice.auxPhase = std::fmod (voice.auxPhase + ((isCinematicBank ? 3.8f : (isLushBank ? 4.1f : 4.6f))
+        voice.auxPhase = std::fmod (voice.auxPhase + ((isCinematicBank ? 3.8f
+                                                                        : (isLushBank ? 4.1f
+                                                                                      : (isHarmonicBank ? 5.4f : 4.6f)))
                                                       / static_cast<float> (currentSampleRate)),
                                     1.0f);
-        const auto vibrato = std::sin (twoPi * voice.auxPhase) * (0.0008f + voice.velocity * (isLushBank ? 0.0034f : 0.0026f)) * vibratoRamp;
-        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (isPizzicatoBank ? 0.06f : 0.1f),
-                                           isPizzicatoBank ? 0.08f : 0.04f,
+        const auto vibrato = std::sin (twoPi * voice.auxPhase)
+                             * (0.0008f + voice.velocity * (isLushBank ? 0.0034f : (isHarmonicBank ? 0.0042f : 0.0026f)))
+                             * vibratoRamp;
+        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f)
+                                               * (isColLegnoBank ? 0.14f
+                                                                 : (isPizzicatoBank ? 0.06f : 0.1f)),
+                                           shortArticulationBank ? 0.08f : (isHarmonicBank ? 0.03f : 0.04f),
                                            voice.colourState);
         const auto sectionA = std::sin (twoPi * std::fmod (voice.phase + vibrato, 1.0f));
         const auto sectionB = std::sin (twoPi * std::fmod ((voice.phase * 1.997f) - (vibrato * 0.35f) + 0.13f, 1.0f));
         const auto body = std::sin (twoPi * std::fmod ((voice.phase * 0.503f) + (voice.auxPhase * 0.021f), 1.0f))
-                          * (isPizzicatoBank ? 0.09f : (isCinematicBank ? 0.14f : 0.11f));
-        const auto rosin = voice.colourState * (isPizzicatoBank ? 0.05f : 0.09f) * std::exp (-voice.noteAge * (isPizzicatoBank ? 70.0f : 18.0f));
+                          * (isColLegnoBank ? 0.06f
+                                            : (isPizzicatoBank ? 0.09f
+                                                               : (isCinematicBank ? 0.14f
+                                                                                  : (isHarmonicBank ? 0.08f : 0.11f))));
+        const auto rosin = voice.colourState * (isPizzicatoBank ? 0.05f
+                                                                : (isColLegnoBank ? 0.09f
+                                                                                  : (isHarmonicBank ? 0.04f : 0.09f)))
+                           * std::exp (-voice.noteAge * (isPizzicatoBank ? 70.0f
+                                                                          : (isColLegnoBank ? 62.0f
+                                                                                            : (isHarmonicBank ? 11.0f : 18.0f))));
         const auto transient = (random.nextFloat() * 2.0f - 1.0f)
-                               * (isPizzicatoBank ? (0.16f + voice.velocity * 0.08f) : 0.05f)
-                               * std::exp (-voice.noteAge * (isPizzicatoBank ? 68.0f : 32.0f));
-        const auto releaseBloom = releaseHint * (isCinematicBank ? 0.08f : 0.04f);
+                               * (isColLegnoBank ? (0.2f + voice.velocity * 0.08f)
+                                                 : (isPizzicatoBank ? (0.16f + voice.velocity * 0.08f)
+                                                                    : (isHarmonicBank ? 0.03f : 0.05f)))
+                               * std::exp (-voice.noteAge * (isColLegnoBank ? 98.0f
+                                                                            : (isPizzicatoBank ? 68.0f : 32.0f)));
+        const auto releaseBloom = releaseHint * (isCinematicBank ? 0.08f
+                                                                 : (isHarmonicBank ? 0.055f
+                                                                                   : (shortArticulationBank ? 0.015f : 0.04f)));
         if (useInstrumentMultisample)
         {
-            const auto motion = isPizzicatoBank ? 0.0f : ((sectionA * 0.018f) + (sectionB * 0.012f));
-            s = smoothTowards ((s * (isPizzicatoBank ? 0.96f : 0.985f))
-                                   + motion
-                                   + (body * (isPizzicatoBank ? 0.02f : 0.035f))
-                                   + (rosin * 0.32f)
-                                   + transient
-                                   + releaseBloom,
-                               isPizzicatoBank ? 0.05f : 0.02f,
-                               voice.toneState);
-            s = softSaturate (s * (1.0f + voice.velocity * 0.03f + (isLushBank ? 0.015f : 0.0f)))
-                * (isPizzicatoBank ? 0.95f : 0.985f) * attackBlend;
+            const auto rawSample = s;
+            const auto motion = shortArticulationBank ? 0.0f
+                                                      : ((sectionA * (isHarmonicBank ? 0.006f : 0.009f))
+                                                         + (sectionB * (isHarmonicBank ? 0.008f : 0.006f)));
+            const auto bodyLift = body * (shortArticulationBank ? 0.004f
+                                                                : (isHarmonicBank ? 0.012f
+                                                                                  : (isCinematicBank ? 0.018f : 0.015f)));
+            const auto bowTexture = rosin * (shortArticulationBank ? 0.08f
+                                                                   : (isHarmonicBank ? 0.06f : 0.1f));
+            const auto attackEdge = transient * (shortArticulationBank ? 0.22f
+                                                                       : (isCinematicBank ? 0.05f
+                                                                                          : (isHarmonicBank ? 0.03f : 0.07f)));
+            const auto releaseLift = releaseBloom * (shortArticulationBank ? 0.35f : 0.6f);
+            const auto sampleCore = (s * (shortArticulationBank ? 0.998f : 0.994f))
+                                    + motion
+                                    + bodyLift
+                                    + bowTexture
+                                    + attackEdge
+                                    + releaseLift;
+            const auto responseRate = shortArticulationBank ? 0.012f : (isHarmonicBank ? 0.01f : 0.011f);
+            const auto sourceDrive = 1.0f
+                                     + voice.velocity * (shortArticulationBank ? 0.01f : 0.015f)
+                                     + (isLushBank ? 0.01f : 0.0f)
+                                     + (isHarmonicBank ? 0.006f : 0.0f);
+            const auto outputTrim = shortArticulationBank ? 0.99f : (isHarmonicBank ? 0.996f : 0.993f);
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sampleCore);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.006f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState)
+                * blendedDrive
+                * blendedTrim
+                * attackBlend;
         }
         else
         {
-            s = smoothTowards ((s * (isPizzicatoBank ? 0.7f : 0.76f))
-                                   + (sectionA * 0.12f)
-                                   + (sectionB * 0.08f)
+            const auto rawSample = s;
+            const auto sourceMix = (rawSample * (shortArticulationBank ? 0.72f : 0.76f))
+                                   + (sectionA * (isHarmonicBank ? 0.09f : 0.12f))
+                                   + (sectionB * (isHarmonicBank ? 0.11f : 0.08f))
                                    + body
                                    + rosin
                                    + transient
-                                   + releaseBloom,
-                               isPizzicatoBank ? 0.09f : 0.03f,
-                               voice.toneState);
-            s = softSaturate (s * (1.02f + voice.velocity * 0.05f + (isLushBank ? 0.03f : 0.0f)))
-                * (isPizzicatoBank ? 0.91f : 0.94f) * attackBlend;
+                                   + releaseBloom;
+            const auto responseRate = shortArticulationBank ? 0.08f : (isHarmonicBank ? 0.026f : 0.03f);
+            const auto sourceDrive = 1.02f
+                                     + voice.velocity * (shortArticulationBank ? 0.035f : 0.05f)
+                                     + (isLushBank ? 0.03f : 0.0f)
+                                     + (isHarmonicBank ? 0.02f : 0.0f);
+            const auto outputTrim = shortArticulationBank ? 0.9f : (isHarmonicBank ? 0.95f : 0.94f);
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.01f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim * attackBlend;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::violin)
@@ -4999,7 +6172,10 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         const auto expressiveBank = params.sampleBank == 1;
         const auto sectionBank = params.sampleBank == 2;
         const auto rosinBank = params.sampleBank == 3;
-        const auto attackBlend = juce::jlimit (0.0f, 1.0f, voice.noteAge / (sectionBank ? 0.11f : 0.07f));
+        const auto toneMacro = normalizedLogValue (params.cutoff, 900.0f, 12000.0f);
+        const auto airMacro = juce::jlimit (0.0f, 1.0f, params.fxMix);
+        const auto sourceBlend = juce::jlimit (0.0f, 1.0f, params.sourceBlend);
+        const auto attackBlend = juce::jlimit (0.0f, 1.0f, voice.noteAge / (sectionBank ? 0.09f : (rosinBank ? 0.04f : 0.055f)));
         const auto vibratoRamp = std::pow (juce::jlimit (0.0f,
                                                          1.0f,
                                                          (voice.noteAge - (rosinBank ? 0.05f : 0.08f))
@@ -5007,29 +6183,84 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
                                            1.3f);
         voice.auxPhase = std::fmod (voice.auxPhase + ((expressiveBank ? 6.0f : 5.4f) / static_cast<float> (currentSampleRate)), 1.0f);
         const auto vibrato = std::sin (twoPi * voice.auxPhase) * (0.0014f + voice.velocity * (expressiveBank ? 0.0052f : 0.0036f)) * vibratoRamp;
-        const auto singing = std::sin (twoPi * std::fmod ((voice.phase * 2.01f) + vibrato, 1.0f)) * (expressiveBank ? 0.14f : 0.1f);
-        const auto body = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + (voice.auxPhase * 0.02f), 1.0f)) * (sectionBank ? 0.11f : 0.08f);
-        const auto releaseSigh = releaseHint * (0.03f + (sectionBank ? 0.02f : 0.0f));
+        const auto body = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + (voice.auxPhase * 0.02f), 1.0f)) * (sectionBank ? 0.1f : 0.07f);
+        const auto releaseSigh = releaseHint * (0.018f + (sectionBank ? 0.016f : 0.0f));
         if (useInstrumentMultisample)
         {
+            const auto rawSample = s;
+            const auto bodyTrack = smoothTowards (s, 0.008f + ((1.0f - toneMacro) * 0.045f), voice.toneState);
+            const auto edge = s - bodyTrack;
+            const auto shimmer = std::sin (twoPi * std::fmod ((voice.phase * (2.0f + vibrato * 32.0f)) + (voice.auxPhase * 0.06f), 1.0f))
+                                 * (expressiveBank ? 0.016f : 0.01f);
+            const auto sectionBloom = std::sin (twoPi * std::fmod ((voice.phase * 1.01f) + 0.11f + (voice.auxPhase * 0.04f), 1.0f))
+                                      * (sectionBank ? 0.024f : 0.0f);
+            const auto rosinAttack = (random.nextFloat() * 2.0f - 1.0f)
+                                     * (0.018f + voice.velocity * (rosinBank ? 0.04f : 0.02f))
+                                     * std::exp (-voice.noteAge * (rosinBank ? 34.0f : 22.0f));
             const auto textureTarget = std::sin (twoPi * std::fmod ((voice.auxPhase * 0.31f) + (voice.phase * 0.17f), 1.0f))
-                                       * (rosinBank ? 0.018f : 0.011f);
+                                       * (rosinBank ? 0.012f : 0.006f);
             voice.colourState = smoothTowards (textureTarget,
-                                               rosinBank ? 0.025f : 0.02f,
+                                               rosinBank ? 0.03f : (sectionBank ? 0.018f : 0.022f),
                                                voice.colourState);
-            const auto bodyBlend = body * (sectionBank ? 0.012f : 0.009f);
-            const auto bowTexture = voice.colourState * (0.55f + voice.velocity * 0.08f);
-            s = smoothTowards ((s * 0.992f)
-                                   + (singing * 0.008f)
-                                   + bodyBlend
-                                   + bowTexture
-                                   + releaseSigh,
-                               sectionBank ? 0.014f : 0.012f,
-                               voice.toneState);
-            s = softSaturate (s * (1.0f + (expressiveBank ? 0.01f : 0.0f))) * 0.992f * attackBlend;
+            const auto bowTexture = voice.colourState
+                                    * (0.035f + airMacro * 0.03f + (rosinBank ? 0.055f : 0.0f))
+                                    * (0.6f + voice.velocity * 0.24f);
+            auto sourceMix = (bodyTrack * 1.12f)
+                             + (edge * (0.48f + toneMacro * 0.26f))
+                             + (body * 0.07f)
+                             + bowTexture
+                             + (releaseSigh * 0.28f);
+            auto responseRate = 0.02f;
+            auto sourceDrive = 0.994f;
+            auto outputTrim = 0.996f;
+
+            if (expressiveBank)
+            {
+                sourceMix = (bodyTrack * 1.05f)
+                            + (edge * (0.62f + toneMacro * 0.34f))
+                            + (shimmer * 0.6f)
+                            + (body * 0.08f)
+                            + (bowTexture * 1.08f)
+                            + (releaseSigh * 0.34f);
+                responseRate = 0.016f;
+                sourceDrive = 1.0f;
+                outputTrim = 0.995f;
+            }
+            else if (sectionBank)
+            {
+                sourceMix = (bodyTrack * 1.2f)
+                            + (edge * (0.28f + toneMacro * 0.16f))
+                            + (sectionBloom * 1.35f)
+                            + (body * 0.12f)
+                            + (bowTexture * 0.72f)
+                            + (releaseSigh * 0.4f);
+                responseRate = 0.024f;
+                sourceDrive = 0.99f;
+                outputTrim = 0.998f;
+            }
+            else if (rosinBank)
+            {
+                sourceMix = (bodyTrack * 0.98f)
+                            + (edge * (0.76f + toneMacro * 0.42f))
+                            + (body * 0.05f)
+                            + (bowTexture * 1.22f)
+                            + rosinAttack
+                            + (releaseSigh * 0.18f);
+                responseRate = 0.013f;
+                sourceDrive = 1.008f;
+                outputTrim = 0.992f;
+            }
+
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.008f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
+            s = smoothTowards (blendedSample, blendedResponse, voice.articulationState);
+            s = softSaturate (s * blendedDrive) * blendedTrim * attackBlend;
         }
         else
         {
+            const auto rawSample = s;
             voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (rosinBank ? 0.16f : 0.11f),
                                                rosinBank ? 0.08f : 0.05f,
                                                voice.colourState);
@@ -5037,10 +6268,17 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
             const auto scrape = (random.nextFloat() * 2.0f - 1.0f)
                                 * (0.08f + voice.velocity * 0.06f + (rosinBank ? 0.05f : 0.0f))
                                 * std::exp (-voice.noteAge * 42.0f);
-            s = smoothTowards ((s * 0.8f) + singing + body + bowNoise + scrape + releaseSigh,
-                               sectionBank ? 0.035f : 0.03f,
-                               voice.toneState);
-            s = softSaturate (s * (1.05f + (expressiveBank ? 0.04f : 0.0f))) * 0.93f * attackBlend;
+            const auto singing = std::sin (twoPi * std::fmod ((voice.phase * 2.01f) + vibrato, 1.0f))
+                                 * (expressiveBank ? 0.12f : 0.08f);
+            const auto sourceMix = (rawSample * (sectionBank ? 0.86f : 0.84f)) + singing + body + bowNoise + scrape + releaseSigh;
+            const auto responseRate = sectionBank ? 0.032f : 0.028f;
+            const auto sourceDrive = 1.02f + (expressiveBank ? 0.02f : 0.0f);
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.012f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, 0.95f);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim * attackBlend;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::flute)
@@ -5048,6 +6286,7 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         const auto breathyBank = params.sampleBank == 1;
         const auto airyBank = params.sampleBank == 2;
         const auto warmBank = params.sampleBank == 3;
+        const auto sourceBlend = juce::jlimit (0.0f, 1.0f, params.sourceBlend);
         const auto attackBlend = juce::jlimit (0.0f, 1.0f, voice.noteAge / (breathyBank ? 0.07f : 0.05f));
         const auto vibratoRamp = std::pow (juce::jlimit (0.0f,
                                                          1.0f,
@@ -5069,70 +6308,85 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         const auto releaseBreath = releaseHint * (breathyBank ? 0.05f : 0.035f);
         if (useInstrumentMultisample)
         {
-            s = smoothTowards ((s * 0.99f)
+            const auto rawSample = s;
+            const auto sourceMix = (rawSample * 0.99f)
                                    + (column * 0.02f)
                                    + (warmth * 0.025f)
                                    + air
                                    + chiff
-                                   + releaseBreath,
-                               0.018f,
-                               voice.toneState);
-            s = softSaturate (s * (warmBank ? 1.0f : 1.01f)) * 0.99f * attackBlend;
+                                   + releaseBreath;
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.01f, 0.018f);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, warmBank ? 1.0f : 1.01f);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, 0.99f);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim * attackBlend;
         }
         else
         {
-            s = smoothTowards ((s * (warmBank ? 0.92f : 0.89f)) + column + warmth + air + chiff + releaseBreath,
-                               warmBank ? 0.035f : 0.025f,
-                               voice.toneState);
-            s = softSaturate (s * (warmBank ? 1.0f : 1.03f)) * 0.96f * attackBlend;
+            const auto rawSample = s;
+            const auto sourceMix = (rawSample * (warmBank ? 0.92f : 0.89f)) + column + warmth + air + chiff + releaseBreath;
+            const auto responseRate = warmBank ? 0.035f : 0.025f;
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.012f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, warmBank ? 1.0f : 1.03f);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, 0.96f);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim * attackBlend;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::saxophone)
     {
-        const auto tenorBank = params.sampleBank == 1;
-        const auto bariBank = params.sampleBank == 2;
+        const auto soloBank = params.sampleBank == 0;
+        const auto warmBank = params.sampleBank == 1;
+        const auto airyBank = params.sampleBank == 2;
         const auto jazzBank = params.sampleBank == 3;
+        const auto sourceBlend = juce::jlimit (0.0f, 1.0f, params.sourceBlend);
         const auto toneMacro = normalizedLogValue (params.cutoff, 280.0f, 14000.0f);
         const auto focusMacro = juce::jlimit (0.0f, 1.0f, params.resonance * 1.8f);
         const auto biteMacro = juce::jlimit (0.0f, 1.0f, params.filterEnvAmount);
         const auto vibratoMacro = std::sqrt (juce::jlimit (0.0f, 1.0f, params.lfo1Pitch / 24.0f));
         const auto colorMacro = juce::jlimit (0.0f, 1.0f, params.fxMix);
-        const auto attackBlend = juce::jlimit (0.0f, 1.0f, voice.noteAge / 0.025f);
+        const auto attackBlend = juce::jlimit (0.0f, 1.0f, voice.noteAge / (warmBank ? 0.036f : (airyBank ? 0.018f : 0.025f)));
         const auto vibratoRamp = std::pow (juce::jlimit (0.0f,
                                                          1.0f,
                                                          (voice.noteAge - (jazzBank ? 0.04f : 0.08f))
-                                                             / (tenorBank ? 0.34f : 0.26f)),
+                                                             / (warmBank ? 0.36f : (airyBank ? 0.2f : (soloBank ? 0.3f : 0.26f)))),
                                            1.4f);
-        const auto vibratoPhase = std::fmod (voice.auxPhase + (voice.noteAge * (jazzBank ? 5.6f : (bariBank ? 4.5f : (tenorBank ? 4.9f : 5.2f)))), 1.0f);
+        const auto vibratoPhase = std::fmod (voice.auxPhase + (voice.noteAge * (jazzBank ? 5.6f : (airyBank ? 5.35f : (warmBank ? 4.6f : 5.0f)))), 1.0f);
         const auto vibrato = std::sin (twoPi * vibratoPhase)
-                             * (0.0012f + voice.velocity * (jazzBank ? 0.0024f : 0.0018f))
+                             * (0.0011f + voice.velocity * (jazzBank ? 0.0024f : (airyBank ? 0.0022f : 0.0017f)))
                              * (0.55f + vibratoMacro * 2.5f)
                              * vibratoRamp;
-        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (jazzBank ? 0.14f : 0.11f),
-                                           jazzBank ? 0.07f : 0.05f,
+        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (jazzBank ? 0.16f : (airyBank ? 0.14f : 0.1f)),
+                                           jazzBank ? 0.07f : (warmBank ? 0.035f : 0.05f),
                                            voice.colourState);
         const auto growl = std::sin ((twoPi * std::fmod (voice.phase + vibrato, 1.0f))
                                      + (std::sin (twoPi * vibratoPhase) * (jazzBank ? 1.9f : 1.4f)));
-        const auto body = std::sin (twoPi * std::fmod ((voice.phase * (bariBank ? 0.5f : 1.0f)) + 0.09f, 1.0f)) * (bariBank ? 0.12f : 0.07f);
-        const auto reed = voice.colourState * (tenorBank ? 0.1f : (bariBank ? 0.14f : 0.16f));
+        const auto body = std::sin (twoPi * std::fmod ((voice.phase * (warmBank ? 0.55f : 1.0f)) + 0.09f, 1.0f))
+                          * (warmBank ? 0.14f : (airyBank ? 0.05f : 0.08f));
+        const auto reed = voice.colourState * (warmBank ? 0.08f : (airyBank ? 0.18f : (jazzBank ? 0.17f : 0.12f)));
         const auto slap = (random.nextFloat() * 2.0f - 1.0f)
-                          * (0.1f + voice.velocity * 0.08f + (jazzBank ? 0.08f : 0.0f))
-                          * std::exp (-voice.noteAge * (jazzBank ? 34.0f : 42.0f));
-        const auto scoop = std::exp (-voice.noteAge * (jazzBank ? 10.0f : 14.0f)) * (0.03f + voice.velocity * 0.03f);
+                          * (0.08f + voice.velocity * (airyBank ? 0.12f : 0.08f) + (jazzBank ? 0.08f : 0.0f))
+                          * std::exp (-voice.noteAge * (jazzBank ? 34.0f : (airyBank ? 46.0f : 42.0f)));
+        const auto scoop = std::exp (-voice.noteAge * (jazzBank ? 10.0f : 14.0f)) * (0.03f + voice.velocity * (jazzBank ? 0.04f : 0.03f));
         const auto overtone = std::sin (twoPi * std::fmod ((voice.phase * 2.0f) + vibrato - scoop, 1.0f)) * (jazzBank ? 0.08f : 0.06f);
-        const auto releaseAir = releaseHint * reed * (0.14f + colorMacro * 0.14f);
+        const auto releaseAir = releaseHint * (airyBank ? 0.08f : reed)
+                                * (airyBank ? (0.24f + colorMacro * 0.24f)
+                                            : (0.14f + colorMacro * 0.14f));
+        const auto rawSample = s;
         const auto bodyTrack = smoothTowards (s, 0.004f + ((1.0f - toneMacro) * 0.09f), voice.toneState);
         const auto edge = s - bodyTrack;
         const auto toneTilt = ((bodyTrack * juce::jmap (toneMacro, 1.42f, 0.56f))
                                + (edge * juce::jmap (toneMacro, 0.025f, 5.4f)))
                               * (0.92f + focusMacro * 0.18f);
         const auto nasalTrack = smoothTowards (edge, 0.012f + (focusMacro * 0.17f), voice.articulationState);
-        const auto formant = nasalTrack * (0.08f + focusMacro * (jazzBank ? 1.75f : 1.48f))
-                             + (std::sin (twoPi * std::fmod ((voice.phase * (1.65f + focusMacro * (bariBank ? 0.45f : 0.72f)))
-                                                             + 0.11f
-                                                             + (vibrato * 0.5f),
-                                                            1.0f))
-                                * (0.02f + focusMacro * (jazzBank ? 0.09f : 0.072f)));
+        const auto formant = nasalTrack * (0.08f + focusMacro * (jazzBank ? 1.75f : (airyBank ? 1.62f : 1.32f)))
+                             + (std::sin (twoPi * std::fmod ((voice.phase * (1.65f + focusMacro * (warmBank ? 0.38f : 0.72f)))
+                                                              + 0.11f
+                                                              + (vibrato * 0.5f),
+                                                             1.0f))
+                                * (0.02f + focusMacro * (jazzBank ? 0.09f : (airyBank ? 0.082f : 0.066f))));
         const auto biteAccent = (slap * (0.22f + biteMacro * 2.4f))
                                 + (overtone * (0.12f + biteMacro * 1.9f))
                                 + (edge * biteMacro * (0.14f + toneMacro * 0.75f));
@@ -5146,21 +6400,92 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
                              + releaseAir;
         if (useInstrumentMultisample)
         {
-            s = softSaturate (saxCore * (1.02f
-                                         + colorMacro * (jazzBank ? 0.46f : 0.34f)
-                                         + biteMacro * 0.52f
-                                         + focusMacro * 0.18f))
-                * (0.965f + toneMacro * 0.03f)
-                * attackBlend;
+            const auto soloMix = (bodyTrack * (1.08f + ((1.0f - toneMacro) * 0.12f)))
+                                 + (edge * (0.95f + (toneMacro * 2.9f)))
+                                 + (reedBody * 0.82f)
+                                 + (biteAccent * 0.48f)
+                                 + (formant * 0.72f)
+                                 + (releaseAir * 0.45f);
+            const auto warmMix = (bodyTrack * 1.28f)
+                                 + (edge * (0.24f + (toneMacro * 1.1f)))
+                                 + (reedBody * 0.58f)
+                                 + (formant * 0.42f)
+                                 + (releaseAir * 0.22f)
+                                 + (body * 0.09f);
+            const auto airyMix = (bodyTrack * 0.72f)
+                                 + (edge * (1.18f + (toneMacro * 4.0f)))
+                                 + (reedBody * 1.04f)
+                                 + (biteAccent * 0.86f)
+                                 + (formant * 1.02f)
+                                 + (releaseAir * 1.36f)
+                                 + (slap * (0.12f + (biteMacro * 0.4f)));
+            const auto jazzMix = (bodyTrack * 0.92f)
+                                 + (edge * (1.0f + (toneMacro * 3.35f)))
+                                 + (reedBody * 0.96f)
+                                 + (biteAccent * 1.2f)
+                                 + (formant * 1.16f)
+                                 + (releaseAir * 0.72f)
+                                 + (growl * (0.05f + (focusMacro * 0.12f)));
+            auto sourceMix = soloMix;
+            auto responseRate = 0.018f;
+            auto sourceDrive = 1.0f + (colorMacro * 0.28f) + (biteMacro * 0.36f) + (focusMacro * 0.14f);
+            auto outputTrim = 0.968f + (toneMacro * 0.03f);
+            if (warmBank)
+            {
+                sourceMix = warmMix;
+                responseRate = 0.028f;
+                sourceDrive = 0.96f + (focusMacro * 0.08f) + (colorMacro * 0.08f);
+                outputTrim = 0.982f;
+            }
+            else if (airyBank)
+            {
+                sourceMix = airyMix;
+                responseRate = 0.012f;
+                sourceDrive = 1.0f + (colorMacro * 0.38f) + (biteMacro * 0.42f) + (toneMacro * 0.06f);
+            }
+            else if (jazzBank)
+            {
+                sourceMix = jazzMix;
+                responseRate = 0.015f;
+                sourceDrive = 1.05f + (colorMacro * 0.48f) + (biteMacro * 0.58f) + (focusMacro * 0.2f);
+                outputTrim = 0.962f + (toneMacro * 0.02f);
+            }
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.008f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim * attackBlend;
         }
         else
         {
-            s = softSaturate (((saxCore * 0.92f)
-                               + (growl * (0.028f + focusMacro * 0.04f))
-                               + (body * 0.08f))
-                              * (1.08f + colorMacro * 0.34f + focusMacro * 0.12f + biteMacro * 0.16f))
-                * 0.94f
-                * attackBlend;
+            auto sourceMix = ((saxCore * 0.92f)
+                              + (growl * (0.028f + focusMacro * 0.04f))
+                              + (body * 0.08f));
+            auto sourceDrive = 1.08f + colorMacro * 0.34f + focusMacro * 0.12f + biteMacro * 0.16f;
+            auto outputTrim = 0.94f;
+            if (warmBank)
+            {
+                sourceMix = (toneTilt * 1.18f) + (body * 0.14f) + (reedBody * 0.55f) + (formant * 0.28f);
+                sourceDrive = 0.98f + (focusMacro * 0.08f) + (colorMacro * 0.08f);
+                outputTrim = 0.95f;
+            }
+            else if (airyBank)
+            {
+                sourceMix = (toneTilt * 0.84f) + (edge * 1.26f) + (reedBody * 0.96f) + (biteAccent * 0.7f) + (releaseAir * 1.08f);
+                sourceDrive = 1.04f + (colorMacro * 0.38f) + (biteMacro * 0.28f);
+                outputTrim = 0.93f;
+            }
+            else if (jazzBank)
+            {
+                sourceMix = (saxCore * 0.98f) + (growl * (0.06f + focusMacro * 0.06f)) + (biteAccent * 0.42f);
+                sourceDrive = 1.12f + colorMacro * 0.4f + focusMacro * 0.16f + biteMacro * 0.22f;
+                outputTrim = 0.935f;
+            }
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
+            s = softSaturate (blendedSample * blendedDrive) * blendedTrim * attackBlend;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::bassGuitar)
@@ -5168,6 +6493,7 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         const auto pickBank = params.sampleBank == 1;
         const auto mutedBank = params.sampleBank == 2;
         const auto roundBank = params.sampleBank == 3;
+        const auto sourceBlend = juce::jlimit (0.0f, 1.0f, params.sourceBlend);
         voice.auxPhase = std::fmod (voice.auxPhase + ((baseHz * 0.35f) / static_cast<float> (currentSampleRate)), 1.0f);
         voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (pickBank ? 0.12f : 0.08f),
                                            pickBank ? 0.18f : 0.1f,
@@ -5184,78 +6510,264 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         const auto fingerBloom = roundBank ? std::sin (twoPi * std::fmod ((voice.phase * 1.5f) + 0.13f, 1.0f)) * 0.05f : 0.0f;
         if (useInstrumentMultisample)
         {
-            s = smoothTowards ((s * 0.985f) + (sub * 0.04f) + (thump * 0.14f) + stringNoise + pickClick + fingerBloom,
-                               mutedBank ? 0.08f : 0.05f,
-                               voice.toneState);
-            s = softSaturate (s * (pickBank ? 1.06f : (roundBank ? 1.03f : 1.04f))) * 0.975f;
+            const auto rawSample = s;
+            const auto sourceMix = (rawSample * 0.985f) + (sub * 0.04f) + (thump * 0.14f) + stringNoise + pickClick + fingerBloom;
+            const auto responseRate = mutedBank ? 0.08f : 0.05f;
+            const auto sourceDrive = pickBank ? 1.06f : (roundBank ? 1.03f : 1.04f);
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.01f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, 0.975f);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim;
         }
         else
         {
-            s = smoothTowards ((s * (roundBank ? 0.8f : 0.82f)) + sub + thump + stringNoise + pickClick + fingerBloom,
-                               mutedBank ? 0.13f : 0.1f,
-                               voice.toneState);
-            s = softSaturate (s * (pickBank ? 1.18f : (roundBank ? 1.08f : 1.14f))) * 0.9f;
+            const auto rawSample = s;
+            const auto sourceMix = (rawSample * (roundBank ? 0.8f : 0.82f)) + sub + thump + stringNoise + pickClick + fingerBloom;
+            const auto responseRate = mutedBank ? 0.13f : 0.1f;
+            const auto sourceDrive = pickBank ? 1.18f : (roundBank ? 1.08f : 1.14f);
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, sourceMix);
+            const auto blendedResponse = juce::jmap (sourceBlend, 0.012f, responseRate);
+            const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+            const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, 0.9f);
+            s = smoothTowards (blendedSample, blendedResponse, voice.toneState);
+            s = softSaturate (s * blendedDrive) * blendedTrim;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::organ)
     {
-        const auto jazzBank = params.sampleBank == 1;
-        const auto cathedralBank = params.sampleBank == 2;
-        const auto gospelBank = params.sampleBank == 3;
+        const auto softStopsBank = params.sampleBank == 1;
+        const auto brightMixtureBank = params.sampleBank == 2;
+        const auto warmDiapasonBank = params.sampleBank == 3;
+        const auto rawSample = s;
         const auto toneMacro = normalizedLogValue (params.cutoff, 700.0f, 18000.0f);
         const auto chorusMacro = juce::jlimit (0.0f, 1.0f, params.fxMix);
         const auto depthMacro = juce::jlimit (0.0f, 1.0f, params.fxIntensity);
+        const auto sourceBlend = juce::jlimit (0.0f, 1.0f, params.sourceBlend);
         const auto releaseMacro = normalizedLogValue (params.ampEnv.release, 0.01f, 3.0f);
-        const auto rotorRate = (cathedralBank ? 0.34f : (gospelBank ? 0.82f : 0.68f))
-                               + (chorusMacro * 0.72f)
-                               + (depthMacro * (gospelBank ? 1.55f : 1.12f));
+        const auto usingGrandOrgueBank = useInstrumentMultisample
+                                         && acousticSampleLibrary != nullptr
+                                         && acousticSampleLibrary->sourcePath.containsIgnoreCase ("GrandOrgue-");
+
+        if (usingGrandOrgueBank)
+        {
+            voice.auxPhase = std::fmod (voice.auxPhase + ((0.05f + chorusMacro * 0.22f + depthMacro * 0.18f)
+                                                          / static_cast<float> (currentSampleRate)),
+                                        1.0f);
+            const auto slowMotion = std::sin (twoPi * voice.auxPhase);
+            voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * 0.01f,
+                                               0.006f,
+                                               voice.colourState);
+
+            const auto bodyRate = softStopsBank ? 0.028f + ((1.0f - toneMacro) * 0.035f)
+                                                : (brightMixtureBank ? 0.008f + ((1.0f - toneMacro) * 0.012f)
+                                                                     : (warmDiapasonBank ? 0.02f + ((1.0f - toneMacro) * 0.026f)
+                                                                                          : 0.016f + ((1.0f - toneMacro) * 0.02f)));
+            const auto harmonicBody = smoothTowards (rawSample, bodyRate, voice.toneState);
+            const auto harmonicEdge = rawSample - harmonicBody;
+            const auto breathNoise = voice.colourState * (softStopsBank ? 0.004f
+                                                                        : (brightMixtureBank ? 0.002f
+                                                                                             : (warmDiapasonBank ? 0.005f : 0.003f)));
+            const auto roomBloom = releaseHint * (softStopsBank ? (0.05f + releaseMacro * 0.08f)
+                                                                : (brightMixtureBank ? (0.012f + releaseMacro * 0.025f)
+                                                                                     : (warmDiapasonBank ? (0.04f + releaseMacro * 0.06f)
+                                                                                                          : (0.028f + releaseMacro * 0.045f))));
+            const auto motionGain = 1.0f + (slowMotion * (softStopsBank ? 0.01f + chorusMacro * 0.015f + depthMacro * 0.02f
+                                                                        : (brightMixtureBank ? 0.004f + chorusMacro * 0.008f + depthMacro * 0.012f
+                                                                                             : (warmDiapasonBank ? 0.008f + chorusMacro * 0.014f + depthMacro * 0.018f
+                                                                                                                  : 0.006f + chorusMacro * 0.01f + depthMacro * 0.014f))));
+
+            auto voicedSample = rawSample;
+            auto responseRate = 0.014f;
+            auto drive = 1.0f;
+            auto outputTrim = 0.998f;
+
+            if (softStopsBank)
+            {
+                voicedSample = (harmonicBody * 1.12f) + (harmonicEdge * 0.12f) + roomBloom + breathNoise;
+                responseRate = 0.026f;
+                drive = 0.994f + chorusMacro * 0.015f;
+            }
+            else if (brightMixtureBank)
+            {
+                voicedSample = (harmonicBody * 0.84f) + (harmonicEdge * 1.08f) + (roomBloom * 0.35f) + (breathNoise * 0.5f);
+                responseRate = 0.009f;
+                drive = 1.006f + depthMacro * 0.02f;
+                outputTrim = 0.992f;
+            }
+            else if (warmDiapasonBank)
+            {
+                voicedSample = (harmonicBody * 1.08f) + (harmonicEdge * 0.2f) + (roomBloom * 0.78f) + (breathNoise * 1.2f);
+                responseRate = 0.02f;
+                drive = 0.998f + chorusMacro * 0.02f + depthMacro * 0.012f;
+            }
+            else
+            {
+                voicedSample = (harmonicBody * 1.0f) + (harmonicEdge * 0.34f) + (roomBloom * 0.58f) + (breathNoise * 0.8f);
+                responseRate = 0.016f;
+                drive = 1.0f + chorusMacro * 0.012f;
+            }
+
+            const auto shapedSample = voicedSample * motionGain;
+            const auto blendedSample = juce::jmap (sourceBlend, rawSample, shapedSample);
+            s = smoothTowards (blendedSample, juce::jmap (sourceBlend, 0.008f, responseRate), voice.articulationState);
+            s = softSaturate (s * juce::jmap (sourceBlend, 1.0f, drive)) * juce::jmap (sourceBlend, 1.0f, outputTrim);
+        }
+        else
+        {
+        const auto rotorRate = (softStopsBank ? 0.28f
+                                              : (brightMixtureBank ? 0.84f
+                                                                   : (warmDiapasonBank ? 0.56f : 0.22f)))
+                               + (chorusMacro * (softStopsBank ? 0.42f
+                                                               : (brightMixtureBank ? 0.26f
+                                                                                    : (warmDiapasonBank ? 0.58f : 0.18f))))
+                               + (depthMacro * (softStopsBank ? 0.72f
+                                                              : (brightMixtureBank ? 1.38f
+                                                                                   : (warmDiapasonBank ? 1.12f : 0.44f))));
         voice.auxPhase = std::fmod (voice.auxPhase + (rotorRate / static_cast<float> (currentSampleRate)),
                                     1.0f);
         const auto rotor = std::sin (twoPi * voice.auxPhase);
         const auto rotorQuad = std::sin (twoPi * std::fmod (voice.auxPhase + 0.25f, 1.0f));
-        const auto drift = rotor * (0.01f + depthMacro * 0.05f) * (cathedralBank ? 0.65f : 1.0f);
-        const auto drawbar2 = std::sin (twoPi * std::fmod ((voice.phase * 2.0f) + drift, 1.0f)) * (jazzBank ? 0.1f : 0.12f);
-        const auto drawbar3 = std::sin (twoPi * std::fmod ((voice.phase * 3.0f) - (drift * 0.7f), 1.0f)) * (cathedralBank ? 0.05f : 0.08f);
+        const auto drift = rotor * (0.008f + depthMacro * 0.05f)
+                           * (softStopsBank ? 0.55f
+                                            : (brightMixtureBank ? 1.18f
+                                                                 : (warmDiapasonBank ? 0.92f : 0.4f)));
+        const auto drawbar2 = std::sin (twoPi * std::fmod ((voice.phase * 2.0f) + drift, 1.0f))
+                              * (softStopsBank ? 0.07f
+                                               : (brightMixtureBank ? 0.16f
+                                                                    : (warmDiapasonBank ? 0.1f : 0.11f)));
+        const auto drawbar3 = std::sin (twoPi * std::fmod ((voice.phase * 3.0f) - (drift * 0.7f), 1.0f))
+                              * (softStopsBank ? 0.03f
+                                               : (brightMixtureBank ? 0.11f
+                                                                    : (warmDiapasonBank ? 0.06f : 0.04f)));
+        const auto upperMixture = std::sin (twoPi * std::fmod ((voice.phase * (brightMixtureBank ? 5.04f : 4.98f))
+                                                               + (rotorQuad * (0.01f + depthMacro * 0.025f)),
+                                                              1.0f))
+                                  * (softStopsBank ? 0.015f
+                                                   : (brightMixtureBank ? 0.11f
+                                                                        : (warmDiapasonBank ? 0.03f : 0.04f)));
         const auto percussion = std::sin (twoPi * std::fmod ((voice.phase * 4.0f) + 0.17f, 1.0f))
-                                * (jazzBank ? 0.08f : (gospelBank ? 0.06f : 0.04f))
-                                * std::exp (-voice.noteAge * (jazzBank ? 18.0f : 10.0f));
-        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (gospelBank ? 0.03f : 0.02f), 0.02f, voice.colourState);
-        const auto leakage = voice.colourState * (gospelBank ? 0.03f : 0.02f);
-        const auto keyClick = (random.nextFloat() * 2.0f - 1.0f) * (cathedralBank ? 0.03f : 0.05f) * std::exp (-voice.noteAge * (cathedralBank ? 70.0f : 95.0f));
-        const auto pipeBody = cathedralBank ? std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + 0.29f, 1.0f)) * 0.08f : 0.0f;
+                                * (softStopsBank ? 0.018f
+                                                 : (brightMixtureBank ? 0.12f
+                                                                      : (warmDiapasonBank ? 0.04f : 0.03f)))
+                                * std::exp (-voice.noteAge * (brightMixtureBank ? 22.0f
+                                                                                : (softStopsBank ? 8.0f : 12.0f)));
+        voice.colourState = smoothTowards ((random.nextFloat() * 2.0f - 1.0f) * (warmDiapasonBank ? 0.028f : 0.018f),
+                                           softStopsBank ? 0.012f : 0.02f,
+                                           voice.colourState);
+        const auto leakage = voice.colourState * (softStopsBank ? 0.018f
+                                                                : (brightMixtureBank ? 0.014f
+                                                                                     : (warmDiapasonBank ? 0.026f : 0.02f)));
+        const auto keyClick = (random.nextFloat() * 2.0f - 1.0f)
+                              * (softStopsBank ? 0.014f
+                                               : (brightMixtureBank ? 0.075f
+                                                                    : (warmDiapasonBank ? 0.028f : 0.02f)))
+                              * std::exp (-voice.noteAge * (brightMixtureBank ? 110.0f
+                                                                              : (softStopsBank ? 56.0f : 72.0f)));
+        const auto pipeBody = std::sin (twoPi * std::fmod ((voice.phase * 0.5f) + 0.29f + (rotor * 0.02f), 1.0f))
+                              * (softStopsBank ? 0.04f
+                                               : (brightMixtureBank ? 0.0f
+                                                                    : (warmDiapasonBank ? 0.065f : 0.1f)));
         const auto chorusVoice = std::sin (twoPi * std::fmod ((voice.phase * 1.98f)
                                                               + (rotorQuad * (0.015f + chorusMacro * 0.065f)),
                                                              1.0f))
-                                 * (0.008f + chorusMacro * 0.05f + depthMacro * 0.04f);
-        const auto harmonicBody = smoothTowards (s, 0.008f + ((1.0f - toneMacro) * 0.03f), voice.toneState);
-        const auto harmonicEdge = s - harmonicBody;
-        const auto harmonicTilt = (harmonicBody * juce::jmap (toneMacro, 1.04f, 0.98f))
-                                  + (harmonicEdge * juce::jmap (toneMacro, 0.2f, 2.45f));
-        const auto percussionAccent = percussion * (0.28f + toneMacro * 0.72f + depthMacro * 0.7f);
-        const auto releaseLeak = releaseHint * (0.015f + releaseMacro * 0.085f) * (0.8f + chorusMacro * 0.5f);
-        const auto rotorAmp = 1.0f + (rotor * (0.035f + chorusMacro * 0.05f + depthMacro * (gospelBank ? 0.16f : 0.12f)));
-        const auto organCore = ((harmonicTilt * (0.98f + toneMacro * 0.04f))
-                                + (drawbar2 * (0.012f + toneMacro * 0.018f + chorusMacro * 0.018f))
-                                + (drawbar3 * (0.01f + toneMacro * 0.024f + depthMacro * 0.014f))
-                                + chorusVoice
-                                + percussionAccent
-                                + (leakage * (0.8f + chorusMacro * 0.95f))
-                                + (keyClick * (0.72f + toneMacro * 0.8f))
-                                + (pipeBody * (0.18f + toneMacro * 0.26f))
-                                + releaseLeak)
-                               * rotorAmp;
+                                 * (softStopsBank ? (0.018f + chorusMacro * 0.06f + depthMacro * 0.05f)
+                                                  : (warmDiapasonBank ? (0.014f + chorusMacro * 0.055f + depthMacro * 0.05f)
+                                                                      : (brightMixtureBank ? (0.004f + chorusMacro * 0.02f + depthMacro * 0.02f)
+                                                                                           : (0.006f + chorusMacro * 0.03f + depthMacro * 0.025f))));
+        const auto harmonicBody = smoothTowards (rawSample,
+                                                 softStopsBank ? 0.024f + ((1.0f - toneMacro) * 0.05f)
+                                                               : (brightMixtureBank ? 0.004f + ((1.0f - toneMacro) * 0.015f)
+                                                                                    : (warmDiapasonBank ? 0.016f + ((1.0f - toneMacro) * 0.04f)
+                                                                                                         : 0.014f + ((1.0f - toneMacro) * 0.035f))),
+                                                 voice.toneState);
+        const auto harmonicEdge = rawSample - harmonicBody;
+        const auto bodyTilt = harmonicBody * (softStopsBank ? juce::jmap (toneMacro, 1.28f, 0.9f)
+                                                            : (brightMixtureBank ? juce::jmap (toneMacro, 0.92f, 0.76f)
+                                                                                 : (warmDiapasonBank ? juce::jmap (toneMacro, 1.18f, 0.88f)
+                                                                                                      : juce::jmap (toneMacro, 1.22f, 0.86f))));
+        const auto edgeTilt = harmonicEdge * (softStopsBank ? juce::jmap (toneMacro, 0.04f, 0.3f)
+                                                            : (brightMixtureBank ? juce::jmap (toneMacro, 0.72f, 3.9f)
+                                                                                 : (warmDiapasonBank ? juce::jmap (toneMacro, 0.14f, 0.95f)
+                                                                                                      : juce::jmap (toneMacro, 0.1f, 0.72f))));
+        const auto upperStack = (drawbar2 * (softStopsBank ? 0.42f
+                                                           : (brightMixtureBank ? 1.32f
+                                                                                : (warmDiapasonBank ? 0.72f : 0.92f))))
+                                + (drawbar3 * (softStopsBank ? 0.28f
+                                                             : (brightMixtureBank ? 1.48f
+                                                                                  : (warmDiapasonBank ? 0.54f : 0.66f))))
+                                + (upperMixture * (brightMixtureBank ? 1.48f
+                                                                     : (softStopsBank ? 0.42f
+                                                                                      : (warmDiapasonBank ? 0.68f : 0.74f))));
+        const auto clickAccent = (percussion * (softStopsBank ? 0.12f
+                                                              : (brightMixtureBank ? 1.16f
+                                                                                   : (warmDiapasonBank ? 0.26f : 0.22f))))
+                                 + (keyClick * (softStopsBank ? 0.2f
+                                                              : (brightMixtureBank ? 1.34f
+                                                                                   : (warmDiapasonBank ? 0.34f : 0.28f))));
+        const auto ambientBloom = (chorusVoice * (softStopsBank ? 1.26f
+                                                                : (brightMixtureBank ? 0.28f
+                                                                                     : (warmDiapasonBank ? 0.94f : 0.56f))))
+                                  + (releaseHint * (0.01f + releaseMacro * (softStopsBank ? 0.11f
+                                                                                           : (brightMixtureBank ? 0.03f
+                                                                                                                : (warmDiapasonBank ? 0.08f : 0.12f)))))
+                                  + (leakage * (softStopsBank ? 1.18f
+                                                              : (brightMixtureBank ? 0.48f
+                                                                                   : (warmDiapasonBank ? 0.92f : 0.76f))))
+                                  + (pipeBody * (softStopsBank ? 0.72f
+                                                               : (brightMixtureBank ? 0.0f
+                                                                                    : (warmDiapasonBank ? 0.84f : 1.18f))));
+        const auto rotorAmp = 1.0f + (rotor * (softStopsBank ? (0.02f + chorusMacro * 0.04f + depthMacro * 0.06f)
+                                                              : (brightMixtureBank ? (0.055f + chorusMacro * 0.035f + depthMacro * 0.12f)
+                                                                                   : (warmDiapasonBank ? (0.04f + chorusMacro * 0.05f + depthMacro * 0.1f)
+                                                                                                        : (0.03f + chorusMacro * 0.035f + depthMacro * 0.05f)))));
+
+        auto sourceMix = (bodyTilt * 1.26f) + (edgeTilt * 0.22f) + (upperStack * 0.96f) + (clickAccent * 0.16f) + (ambientBloom * 1.1f);
+        auto responseRate = 0.026f;
+        auto sourceDrive = 0.988f;
+        auto outputTrim = 0.996f;
+
+        if (softStopsBank)
+        {
+            sourceMix = (bodyTilt * 1.46f) + (edgeTilt * 0.08f) + (upperStack * 0.34f) + (clickAccent * 0.08f) + (ambientBloom * 1.22f);
+            responseRate = 0.036f;
+            sourceDrive = 0.972f + chorusMacro * 0.04f;
+        }
+        else if (brightMixtureBank)
+        {
+            sourceMix = (bodyTilt * 0.76f) + (edgeTilt * 1.34f) + (upperStack * 1.42f) + (clickAccent * 1.22f) + (ambientBloom * 0.18f);
+            responseRate = 0.009f;
+            sourceDrive = 1.045f + chorusMacro * 0.1f + depthMacro * 0.16f;
+            outputTrim = 0.982f;
+        }
+        else if (warmDiapasonBank)
+        {
+            sourceMix = (bodyTilt * 1.2f) + (edgeTilt * 0.24f) + (upperStack * 0.62f) + (clickAccent * 0.18f) + (ambientBloom * 0.88f);
+            responseRate = 0.024f;
+            sourceDrive = 0.992f + chorusMacro * 0.06f + depthMacro * 0.08f;
+            outputTrim = 0.994f;
+        }
+
+        const auto organCore = sourceMix * rotorAmp;
+        const auto blendedCore = juce::jmap (sourceBlend, rawSample, organCore);
+        const auto blendedResponse = juce::jmap (sourceBlend, 0.012f, responseRate);
+        const auto blendedDrive = juce::jmap (sourceBlend, 1.0f, sourceDrive);
+        const auto blendedTrim = juce::jmap (sourceBlend, 1.0f, outputTrim);
         if (useInstrumentMultisample)
         {
-            s = softSaturate (organCore * (1.0f + chorusMacro * 0.12f + depthMacro * 0.16f))
-                * (cathedralBank ? 0.99f : 0.985f);
+            s = smoothTowards (blendedCore, blendedResponse, voice.articulationState);
+            s = softSaturate (s * blendedDrive) * blendedTrim;
         }
         else
         {
-            s = softSaturate (((organCore * 0.92f)
-                               + (drawbar2 * 0.06f)
-                               + (drawbar3 * 0.05f))
-                              * (1.02f + chorusMacro * 0.18f + depthMacro * 0.2f))
-                * 0.96f;
+            s = softSaturate (((juce::jmap (sourceBlend, rawSample, organCore) * 0.9f)
+                               + (drawbar2 * (brightMixtureBank ? 0.11f : 0.06f))
+                               + (drawbar3 * (brightMixtureBank ? 0.09f : 0.04f))
+                               + (upperMixture * (brightMixtureBank ? 0.08f : 0.02f)))
+                              * (blendedDrive + chorusMacro * 0.06f + depthMacro * 0.04f))
+                * (blendedTrim * 0.98f);
+        }
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::advanced)
@@ -5328,12 +6840,40 @@ float AdvancedVSTiAudioProcessor::renderVoiceSample (VoiceState& voice, SampleMo
         voice.arpControlled = false;
     }
 
-    const auto velocityGain = useInstrumentMultisample ? juce::jlimit (0.74f, 1.12f, 0.74f + (voice.velocity * 0.38f))
-                                                       : voice.velocity;
+    const auto velocityGain = useInstrumentMultisample
+                                  ? (buildFlavor() == InstrumentFlavor::piano
+                                         ? juce::jlimit (0.52f,
+                                                         1.4f,
+                                                         0.52f + (0.88f * std::pow (juce::jlimit (0.0f, 1.0f, voice.velocity), 1.15f)))
+                                         : juce::jlimit (0.74f, 1.12f, 0.74f + (voice.velocity * 0.38f)))
+                                  : voice.velocity;
+    const auto clickGuardSeconds = useInstrumentMultisample
+                                       ? (buildFlavor() == InstrumentFlavor::piano ? 0.0016f
+                                                                                   : (buildFlavor() == InstrumentFlavor::saxophone ? 0.014f
+                                                                                                                                   : (buildFlavor() == InstrumentFlavor::stringEnsemble ? 0.012f
+                                                                                                                                                                                       : 0.008f)))
+                                       : 0.008f;
     const auto clickGuard = (useInstrumentMultisample || (isAcousticFlavor() && params.oscType == OscType::sample))
-                                ? juce::jlimit (0.0f, 1.0f, voice.noteAge / 0.008f)
+                                ? juce::jlimit (0.0f, 1.0f, voice.noteAge / clickGuardSeconds)
                                 : 1.0f;
-    return s * ampEnv * juce::jlimit (0.0f, 2.0f, 1.0f + voiceMod.ampLevel) * gatePass * rhythmGate * velocityGain * clickGuard;
+    auto forcedFade = 1.0f;
+    if (voice.forcedFadeSamplesRemaining > 0)
+    {
+        forcedFade = juce::jlimit (0.0f,
+                                   1.0f,
+                                   static_cast<float> (voice.forcedFadeSamplesRemaining)
+                                       / static_cast<float> (juce::jmax (1, voice.forcedFadeSamplesTotal)));
+        --voice.forcedFadeSamplesRemaining;
+        if (voice.forcedFadeSamplesRemaining <= 0)
+        {
+            voice.forcedFadeSamplesRemaining = 0;
+            voice.forcedFadeSamplesTotal = 0;
+            voice.active = false;
+            voice.arpControlled = false;
+        }
+    }
+    return s * ampEnv * juce::jlimit (0.0f, 2.0f, 1.0f + voiceMod.ampLevel)
+           * gatePass * rhythmGate * velocityGain * clickGuard * forcedFade;
 }
 
 void AdvancedVSTiAudioProcessor::updateRenderParameters()
@@ -5375,7 +6915,10 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
         renderParams.masterLevel = paramValue (apvts, "MASTERLEVEL");
 
     renderParams.detune = paramValue (apvts, "DETUNE");
-    renderParams.portamentoTime = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "PORTAMENTO") : 0.0f;
+    renderParams.portamentoTime = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "PORTAMENTO")
+                                                                              : (buildFlavor() == InstrumentFlavor::bassSynth
+                                                                                     ? bassSlideTimeSeconds (paramValue (apvts, "OSCGATE"))
+                                                                                     : 0.0f);
     if constexpr (buildFlavor() == InstrumentFlavor::advanced)
     {
         const auto fmEnabled = paramValue (apvts, "FMENABLE") >= 0.5f;
@@ -5435,6 +6978,8 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     renderParams.resonance2 = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "RESONANCE2") : renderParams.resonance;
     renderParams.filterEnvAmount = paramValue (apvts, "FILTERENVAMOUNT");
     renderParams.filterBalance = paramValue (apvts, "FILTERBALANCE");
+    if constexpr (supportsSourceBlend())
+        renderParams.sourceBlend = paramValue (apvts, "SOURCEBLEND");
     renderParams.panorama = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "PANORAMA") : 0.0f;
     renderParams.keyFollow = buildFlavor() == InstrumentFlavor::advanced ? paramValue (apvts, "KEYFOLLOW") : 0.0f;
     if constexpr (buildFlavor() != InstrumentFlavor::vec1DrumPad)
@@ -5590,6 +7135,7 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     renderParams.highEqFreq = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "HIGHEQFREQ") : 5000.0f;
     renderParams.highEqQ = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramValue (apvts, "HIGHEQQ") : 0.8f;
     renderParams.saturationType = (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor()) ? paramIndex (apvts, "SATURATIONTYPE") : 0;
+    renderParams.presetIndex = paramIndex (apvts, "PRESET");
 
     for (auto& slot : renderParams.modulationMatrix)
     {
@@ -5810,7 +7356,12 @@ void AdvancedVSTiAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         SampleModulationSums sampleModSums;
         float sum = 0.0f;
-        const auto voiceLimit = activeVoiceLimit();
+        const auto voiceLimit = [&] () -> int
+        {
+            if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
+                return voiceLimitForFlavor();
+            return activeVoiceLimit();
+        }();
         for (int voiceIndex = 0; voiceIndex < voiceLimit; ++voiceIndex)
             sum += renderVoiceSample (voices[static_cast<size_t> (voiceIndex)], sampleModSums);
 
@@ -5968,6 +7519,9 @@ void AdvancedVSTiAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if constexpr (buildFlavor() == InstrumentFlavor::advanced)
             buffer.applyGain (juce::jlimit (0.0f, 1.5f, renderParams.masterLevel));
     }
+
+    buffer.applyGain (juce::Decibels::decibelsToGain (renderParams.outputGainDb));
+    updateOutputMeterLevel (buffer);
 }
 
 void AdvancedVSTiAudioProcessor::applyAdvancedEffects (juce::AudioBuffer<float>& buffer)
@@ -6427,6 +7981,20 @@ void AdvancedVSTiAudioProcessor::updateEqAnalyzer (const juce::AudioBuffer<float
     }
 }
 
+void AdvancedVSTiAudioProcessor::updateOutputMeterLevel (const juce::AudioBuffer<float>& buffer) noexcept
+{
+    float peak = 0.0f;
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        peak = juce::jmax (peak, buffer.getMagnitude (channel, 0, buffer.getNumSamples()));
+
+    peak = juce::jlimit (0.0f, 2.0f, peak);
+    const auto current = outputMeterLevel.load();
+    const auto smoothed = peak > current
+                              ? (current * 0.34f + peak * 0.66f)
+                              : (current * 0.88f + peak * 0.12f);
+    outputMeterLevel.store (smoothed);
+}
+
 void AdvancedVSTiAudioProcessor::processNativeEffectBlock (juce::AudioBuffer<float>& buffer)
 {
     if (buffer.getNumChannels() < 2 || buffer.getNumSamples() <= 0)
@@ -6803,6 +8371,7 @@ void AdvancedVSTiAudioProcessor::processNativeEffectBlock (juce::AudioBuffer<flo
     }
 
     buffer.applyGain (juce::Decibels::decibelsToGain (renderParams.outputGainDb));
+    updateOutputMeterLevel (buffer);
 
     if constexpr (buildFlavor() == InstrumentFlavor::graphicEqFx
                   || buildFlavor() == InstrumentFlavor::parametricEqFx)
@@ -6910,6 +8479,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     float resonanceMax = 10.0f;
     float filterEnvAmountDefault = 0.5f;
     float filterBalanceDefault = 0.0f;
+    float sourceBlendDefault = 1.0f;
     float panoramaDefault = 0.0f;
     float keyFollowDefault = 0.0f;
     int sampleBankDefault = 0;
@@ -7374,6 +8944,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         cutoffDefault = 7600.0f;
         resonanceDefault = 0.04f;
         filterEnvAmountDefault = 0.02f;
+        sourceBlendDefault = 0.46f;
         sampleEndDefault = 1.0f;
         fxTypeDefault = 3;
         fxMixDefault = 0.12f;
@@ -7563,6 +9134,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("SAMPLEBANK", "Sample Bank", sampleBankChoices(), sampleBankDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("SAMPLESTART", "Sample Start", 0.0f, 0.95f, sampleStartDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("SAMPLEEND", "Sample End", 0.05f, 1.0f, sampleEndDefault));
+    if constexpr (supportsSourceBlend())
+        params.push_back (std::make_unique<juce::AudioParameterFloat> ("SOURCEBLEND", "Source Blend", 0.0f, 1.0f, sourceBlendDefault));
     if constexpr (buildFlavor() == InstrumentFlavor::advanced || isEffectFlavor())
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("MASTERLEVEL", "Master Level", 0.0f, 1.5f, masterLevelDefault));
     if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
@@ -7608,9 +9181,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     else
     {
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("DETUNE", "Detune", 0.0f, 1.0f, detuneDefault));
-        params.push_back (std::make_unique<juce::AudioParameterFloat> ("FMAMOUNT", "FM Amount", 0.0f, 1000.0f, fmDefault));
+        params.push_back (std::make_unique<juce::AudioParameterFloat> ("FMAMOUNT",
+                                                                       buildFlavor() == InstrumentFlavor::bassSynth ? "Accent" : "FM Amount",
+                                                                       0.0f, 1000.0f, fmDefault));
         params.push_back (std::make_unique<juce::AudioParameterFloat> ("SYNC", "Sync", 0.0f, 4.0f, syncDefault));
-        params.push_back (std::make_unique<juce::AudioParameterFloat> ("OSCGATE", "Osc Note Length Gate", 0.01f, 8.0f, gateDefault));
+        params.push_back (std::make_unique<juce::AudioParameterFloat> ("OSCGATE",
+                                                                       buildFlavor() == InstrumentFlavor::bassSynth ? "Slide" : "Osc Note Length Gate",
+                                                                       0.01f, 8.0f, gateDefault));
         if constexpr (buildFlavor() == InstrumentFlavor::advanced)
             params.push_back (std::make_unique<juce::AudioParameterFloat> ("PORTAMENTO", "Portamento", 0.0f, 1.5f, portamentoDefault));
     }
@@ -7976,19 +9553,35 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
         {
             case 1:
                 setParameterActual ("OSCTYPE", 1.0f);
-                setParameterActual ("CUTOFF", 320.0f);
-                setParameterActual ("RESONANCE", 0.2f);
-                setParameterActual ("FILTERENVAMOUNT", 0.34f);
-                setParameterActual ("AMPDECAY", 0.16f);
-                setParameterActual ("AMPSUSTAIN", 0.76f);
+                setParameterActual ("CUTOFF", 460.0f);
+                setParameterActual ("RESONANCE", 0.58f);
+                setParameterActual ("FILTERENVAMOUNT", 0.52f);
+                setParameterActual ("AMPATTACK", 0.001f);
+                setParameterActual ("AMPDECAY", 0.18f);
+                setParameterActual ("AMPSUSTAIN", 0.0f);
+                setParameterActual ("AMPRELEASE", 0.05f);
+                setParameterActual ("FILTATTACK", 0.001f);
+                setParameterActual ("FILTDECAY", 0.16f);
+                setParameterActual ("FILTSUSTAIN", 0.0f);
+                setParameterActual ("FILTRELEASE", 0.04f);
+                setParameterActual ("FMAMOUNT", 620.0f);
+                setParameterActual ("OSCGATE", 0.34f);
                 break;
             case 2:
                 setParameterActual ("OSCTYPE", 2.0f);
-                setParameterActual ("CUTOFF", 210.0f);
-                setParameterActual ("RESONANCE", 0.16f);
-                setParameterActual ("FILTERENVAMOUNT", 0.28f);
-                setParameterActual ("AMPDECAY", 0.14f);
-                setParameterActual ("AMPSUSTAIN", 0.7f);
+                setParameterActual ("CUTOFF", 340.0f);
+                setParameterActual ("RESONANCE", 0.64f);
+                setParameterActual ("FILTERENVAMOUNT", 0.48f);
+                setParameterActual ("AMPATTACK", 0.001f);
+                setParameterActual ("AMPDECAY", 0.16f);
+                setParameterActual ("AMPSUSTAIN", 0.0f);
+                setParameterActual ("AMPRELEASE", 0.05f);
+                setParameterActual ("FILTATTACK", 0.001f);
+                setParameterActual ("FILTDECAY", 0.14f);
+                setParameterActual ("FILTSUSTAIN", 0.0f);
+                setParameterActual ("FILTRELEASE", 0.04f);
+                setParameterActual ("FMAMOUNT", 700.0f);
+                setParameterActual ("OSCGATE", 0.42f);
                 break;
             case 3:
                 setParameterActual ("OSCTYPE", 1.0f);
@@ -7998,6 +9591,8 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("AMPDECAY", 0.11f);
                 setParameterActual ("AMPSUSTAIN", 0.42f);
                 setParameterActual ("AMPRELEASE", 0.09f);
+                setParameterActual ("FMAMOUNT", 180.0f);
+                setParameterActual ("OSCGATE", 0.2f);
                 break;
             default:
                 setParameterActual ("OSCTYPE", 0.0f);
@@ -8007,6 +9602,8 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("AMPDECAY", 0.14f);
                 setParameterActual ("AMPSUSTAIN", 0.82f);
                 setParameterActual ("AMPRELEASE", 0.1f);
+                setParameterActual ("FMAMOUNT", 80.0f);
+                setParameterActual ("OSCGATE", 0.12f);
                 break;
         }
     }
@@ -8149,6 +9746,7 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
     else if constexpr (buildFlavor() == InstrumentFlavor::piano)
     {
         setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
+        setParameterActual ("SOURCEBLEND", 1.0f);
         setParameterActual ("AMPDECAY", 0.04f);
         setParameterActual ("AMPSUSTAIN", 1.0f);
         switch (presetIndex)
@@ -8180,6 +9778,42 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
                 setParameterActual ("DELAYSEND", 0.03f);
                 setParameterActual ("FXMIX", 0.03f);
                 break;
+            case 4:
+                setParameterActual ("CUTOFF", 15600.0f);
+                setParameterActual ("AMPATTACK", 0.001f);
+                setParameterActual ("AMPRELEASE", 0.09f);
+                setParameterActual ("FILTERENVAMOUNT", 0.045f);
+                setParameterActual ("REVERBMIX", 0.03f);
+                setParameterActual ("DELAYSEND", 0.0f);
+                setParameterActual ("FXMIX", 0.045f);
+                break;
+            case 5:
+                setParameterActual ("CUTOFF", 7200.0f);
+                setParameterActual ("AMPATTACK", 0.001f);
+                setParameterActual ("AMPRELEASE", 0.16f);
+                setParameterActual ("FILTERENVAMOUNT", 0.015f);
+                setParameterActual ("REVERBMIX", 0.08f);
+                setParameterActual ("DELAYSEND", 0.0f);
+                setParameterActual ("FXMIX", 0.015f);
+                break;
+            case 6:
+                setParameterActual ("CUTOFF", 17200.0f);
+                setParameterActual ("AMPATTACK", 0.001f);
+                setParameterActual ("AMPRELEASE", 0.11f);
+                setParameterActual ("FILTERENVAMOUNT", 0.055f);
+                setParameterActual ("REVERBMIX", 0.045f);
+                setParameterActual ("DELAYSEND", 0.0f);
+                setParameterActual ("FXMIX", 0.05f);
+                break;
+            case 7:
+                setParameterActual ("CUTOFF", 8400.0f);
+                setParameterActual ("AMPATTACK", 0.001f);
+                setParameterActual ("AMPRELEASE", 0.13f);
+                setParameterActual ("FILTERENVAMOUNT", 0.012f);
+                setParameterActual ("REVERBMIX", 0.025f);
+                setParameterActual ("DELAYSEND", 0.0f);
+                setParameterActual ("FXMIX", 0.01f);
+                break;
             default:
                 setParameterActual ("CUTOFF", 14800.0f);
                 setParameterActual ("AMPATTACK", 0.001f);
@@ -8194,99 +9828,148 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
     else if constexpr (buildFlavor() == InstrumentFlavor::stringEnsemble)
     {
         setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
+        setParameterActual ("SOURCEBLEND", 1.0f);
         switch (presetIndex)
         {
             case 1:
                 setParameterActual ("UNISON", 2.0f);
-                setParameterActual ("CUTOFF", 3600.0f);
+                setParameterActual ("CUTOFF", 9200.0f);
                 setParameterActual ("AMPATTACK", 0.09f);
                 setParameterActual ("AMPDECAY", 0.6f);
                 setParameterActual ("AMPSUSTAIN", 0.92f);
                 setParameterActual ("AMPRELEASE", 1.1f);
                 setParameterActual ("LFO1PITCH", 0.16f);
-                setParameterActual ("FXMIX", 0.16f);
-                setParameterActual ("REVERBMIX", 0.22f);
+                setParameterActual ("FXMIX", 0.06f);
+                setParameterActual ("REVERBMIX", 0.16f);
                 break;
             case 2:
                 setParameterActual ("UNISON", 1.0f);
-                setParameterActual ("CUTOFF", 6200.0f);
+                setParameterActual ("CUTOFF", 12800.0f);
                 setParameterActual ("AMPATTACK", 0.001f);
                 setParameterActual ("AMPDECAY", 0.18f);
                 setParameterActual ("AMPSUSTAIN", 0.18f);
                 setParameterActual ("AMPRELEASE", 0.18f);
-                setParameterActual ("FILTERENVAMOUNT", 0.22f);
-                setParameterActual ("FXMIX", 0.04f);
-                setParameterActual ("REVERBMIX", 0.08f);
+                setParameterActual ("FILTERENVAMOUNT", 0.12f);
+                setParameterActual ("FXMIX", 0.01f);
+                setParameterActual ("REVERBMIX", 0.04f);
                 break;
             case 3:
                 setParameterActual ("UNISON", 2.0f);
-                setParameterActual ("CUTOFF", 3000.0f);
+                setParameterActual ("CUTOFF", 7800.0f);
                 setParameterActual ("AMPATTACK", 0.22f);
                 setParameterActual ("AMPDECAY", 0.62f);
                 setParameterActual ("AMPSUSTAIN", 0.94f);
                 setParameterActual ("AMPRELEASE", 1.4f);
                 setParameterActual ("LFO1PITCH", 0.12f);
-                setParameterActual ("FXMIX", 0.18f);
-                setParameterActual ("DELAYSEND", 0.08f);
-                setParameterActual ("REVERBMIX", 0.28f);
+                setParameterActual ("FXMIX", 0.08f);
+                setParameterActual ("DELAYSEND", 0.03f);
+                setParameterActual ("REVERBMIX", 0.2f);
+                break;
+            case 4:
+                setParameterActual ("UNISON", 2.0f);
+                setParameterActual ("CUTOFF", 11800.0f);
+                setParameterActual ("AMPATTACK", 0.024f);
+                setParameterActual ("AMPDECAY", 0.34f);
+                setParameterActual ("AMPSUSTAIN", 0.84f);
+                setParameterActual ("AMPRELEASE", 0.52f);
+                setParameterActual ("FILTERENVAMOUNT", 0.12f);
+                setParameterActual ("FXMIX", 0.03f);
+                setParameterActual ("REVERBMIX", 0.1f);
+                break;
+            case 5:
+                setParameterActual ("UNISON", 1.0f);
+                setParameterActual ("CUTOFF", 13200.0f);
+                setParameterActual ("AMPATTACK", 0.002f);
+                setParameterActual ("AMPDECAY", 0.16f);
+                setParameterActual ("AMPSUSTAIN", 0.24f);
+                setParameterActual ("AMPRELEASE", 0.15f);
+                setParameterActual ("FILTERENVAMOUNT", 0.1f);
+                setParameterActual ("FXMIX", 0.01f);
+                setParameterActual ("REVERBMIX", 0.03f);
+                break;
+            case 6:
+                setParameterActual ("UNISON", 2.0f);
+                setParameterActual ("CUTOFF", 15500.0f);
+                setParameterActual ("AMPATTACK", 0.038f);
+                setParameterActual ("AMPDECAY", 0.42f);
+                setParameterActual ("AMPSUSTAIN", 0.88f);
+                setParameterActual ("AMPRELEASE", 0.72f);
+                setParameterActual ("LFO1PITCH", 0.1f);
+                setParameterActual ("FXMIX", 0.06f);
+                setParameterActual ("REVERBMIX", 0.12f);
+                break;
+            case 7:
+                setParameterActual ("UNISON", 1.0f);
+                setParameterActual ("CUTOFF", 9800.0f);
+                setParameterActual ("AMPATTACK", 0.004f);
+                setParameterActual ("AMPDECAY", 0.2f);
+                setParameterActual ("AMPSUSTAIN", 0.34f);
+                setParameterActual ("AMPRELEASE", 0.2f);
+                setParameterActual ("FILTERENVAMOUNT", 0.08f);
+                setParameterActual ("FXMIX", 0.0f);
+                setParameterActual ("REVERBMIX", 0.02f);
                 break;
             default:
                 setParameterActual ("UNISON", 1.0f);
-                setParameterActual ("CUTOFF", 4200.0f);
+                setParameterActual ("CUTOFF", 8600.0f);
                 setParameterActual ("AMPATTACK", 0.06f);
                 setParameterActual ("AMPDECAY", 0.48f);
                 setParameterActual ("AMPSUSTAIN", 0.9f);
                 setParameterActual ("AMPRELEASE", 0.55f);
                 setParameterActual ("LFO1PITCH", 0.18f);
-                setParameterActual ("FXMIX", 0.08f);
-                setParameterActual ("REVERBMIX", 0.14f);
+                setParameterActual ("FXMIX", 0.03f);
+                setParameterActual ("REVERBMIX", 0.1f);
                 break;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::violin)
     {
         setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
+        setParameterActual ("SOURCEBLEND", 1.0f);
         switch (presetIndex)
         {
             case 1:
-                setParameterActual ("CUTOFF", 3900.0f);
-                setParameterActual ("AMPATTACK", 0.07f);
-                setParameterActual ("AMPRELEASE", 1.1f);
-                setParameterActual ("LFO1PITCH", 0.35f);
-                setParameterActual ("FXMIX", 0.16f);
-                setParameterActual ("REVERBMIX", 0.2f);
+                setParameterActual ("CUTOFF", 4800.0f);
+                setParameterActual ("AMPATTACK", 0.045f);
+                setParameterActual ("AMPRELEASE", 0.95f);
+                setParameterActual ("LFO1PITCH", 0.42f);
+                setParameterActual ("FXMIX", 0.08f);
+                setParameterActual ("REVERBMIX", 0.12f);
                 break;
             case 2:
-                setParameterActual ("UNISON", 2.0f);
-                setParameterActual ("CUTOFF", 3000.0f);
-                setParameterActual ("AMPATTACK", 0.12f);
-                setParameterActual ("AMPRELEASE", 1.2f);
+                setParameterActual ("UNISON", 1.0f);
+                setParameterActual ("CUTOFF", 4200.0f);
+                setParameterActual ("AMPATTACK", 0.075f);
+                setParameterActual ("AMPRELEASE", 1.05f);
                 setParameterActual ("LFO1PITCH", 0.18f);
-                setParameterActual ("FXMIX", 0.18f);
-                setParameterActual ("REVERBMIX", 0.24f);
+                setParameterActual ("FXMIX", 0.05f);
+                setParameterActual ("REVERBMIX", 0.1f);
                 break;
             case 3:
-                setParameterActual ("CUTOFF", 2600.0f);
-                setParameterActual ("AMPATTACK", 0.015f);
-                setParameterActual ("AMPDECAY", 0.28f);
-                setParameterActual ("AMPSUSTAIN", 0.7f);
-                setParameterActual ("AMPRELEASE", 0.38f);
-                setParameterActual ("FILTERENVAMOUNT", 0.22f);
+                setParameterActual ("CUTOFF", 5600.0f);
+                setParameterActual ("AMPATTACK", 0.01f);
+                setParameterActual ("AMPDECAY", 0.24f);
+                setParameterActual ("AMPSUSTAIN", 0.76f);
+                setParameterActual ("AMPRELEASE", 0.32f);
+                setParameterActual ("FILTERENVAMOUNT", 0.14f);
                 setParameterActual ("LFO1PITCH", 0.12f);
+                setParameterActual ("FXMIX", 0.04f);
+                setParameterActual ("REVERBMIX", 0.08f);
                 break;
             default:
-                setParameterActual ("CUTOFF", 3400.0f);
-                setParameterActual ("AMPATTACK", 0.05f);
-                setParameterActual ("AMPRELEASE", 0.96f);
+                setParameterActual ("CUTOFF", 5200.0f);
+                setParameterActual ("AMPATTACK", 0.035f);
+                setParameterActual ("AMPRELEASE", 0.78f);
                 setParameterActual ("LFO1PITCH", 0.24f);
-                setParameterActual ("FXMIX", 0.12f);
-                setParameterActual ("REVERBMIX", 0.18f);
+                setParameterActual ("FXMIX", 0.06f);
+                setParameterActual ("REVERBMIX", 0.1f);
                 break;
         }
     }
     else if constexpr (buildFlavor() == InstrumentFlavor::flute)
     {
         setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
+        setParameterActual ("SOURCEBLEND", 1.0f);
         switch (presetIndex)
         {
             case 1:
@@ -8324,6 +10007,7 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
     else if constexpr (buildFlavor() == InstrumentFlavor::saxophone)
     {
         setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
+        setParameterActual ("SOURCEBLEND", 1.0f);
         setParameterActual ("FILTERTYPE", 1.0f);
         switch (presetIndex)
         {
@@ -8366,6 +10050,7 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
     else if constexpr (buildFlavor() == InstrumentFlavor::bassGuitar)
     {
         setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
+        setParameterActual ("SOURCEBLEND", 1.0f);
         switch (presetIndex)
         {
             case 1:
@@ -8404,32 +10089,56 @@ void AdvancedVSTiAudioProcessor::applyPresetByIndex (int presetIndex)
     {
         setParameterActual ("SAMPLEBANK", static_cast<float> (juce::jlimit (0, juce::jmax (0, sampleBankChoices().size() - 1), presetIndex)));
         setParameterActual ("FILTERTYPE", 1.0f);
+        const auto useGrandOrgue = hasGrandOrgueOrganBank (openInstrumentSamplesRoot(), presetIndex);
         switch (presetIndex)
         {
             case 1:
-                setParameterActual ("CUTOFF", 6600.0f);
-                setParameterActual ("RESONANCE", 0.06f);
-                setParameterActual ("FXMIX", 0.1f);
-                setParameterActual ("REVERBMIX", 0.08f);
+                setParameterActual ("CUTOFF", 3600.0f);
+                setParameterActual ("RESONANCE", 0.02f);
+                setParameterActual ("AMPATTACK", 0.008f);
+                setParameterActual ("AMPRELEASE", 0.16f);
+                setParameterActual ("FILTERENVAMOUNT", 0.0f);
+                setParameterActual ("SOURCEBLEND", useGrandOrgue ? 0.14f : 0.3f);
+                setParameterActual ("FXMIX", 0.12f);
+                setParameterActual ("FXINTENSITY", 0.18f);
+                setParameterActual ("REVERBMIX", 0.1f);
+                setParameterActual ("DELAYSEND", 0.0f);
                 break;
             case 2:
-                setParameterActual ("CUTOFF", 7200.0f);
-                setParameterActual ("AMPATTACK", 0.01f);
-                setParameterActual ("AMPRELEASE", 0.26f);
-                setParameterActual ("REVERBMIX", 0.26f);
-                setParameterActual ("FXMIX", 0.14f);
-                setParameterActual ("DELAYSEND", 0.06f);
+                setParameterActual ("CUTOFF", 14800.0f);
+                setParameterActual ("RESONANCE", 0.08f);
+                setParameterActual ("AMPATTACK", 0.001f);
+                setParameterActual ("AMPRELEASE", 0.14f);
+                setParameterActual ("FILTERENVAMOUNT", 0.06f);
+                setParameterActual ("SOURCEBLEND", useGrandOrgue ? 0.24f : 0.72f);
+                setParameterActual ("FXMIX", 0.03f);
+                setParameterActual ("FXINTENSITY", 0.08f);
+                setParameterActual ("REVERBMIX", 0.04f);
+                setParameterActual ("DELAYSEND", 0.0f);
                 break;
             case 3:
-                setParameterActual ("CUTOFF", 5800.0f);
-                setParameterActual ("FILTERENVAMOUNT", 0.04f);
-                setParameterActual ("FXMIX", 0.16f);
-                setParameterActual ("REVERBMIX", 0.18f);
+                setParameterActual ("CUTOFF", 5200.0f);
+                setParameterActual ("RESONANCE", 0.03f);
+                setParameterActual ("AMPATTACK", 0.004f);
+                setParameterActual ("AMPRELEASE", 0.24f);
+                setParameterActual ("FILTERENVAMOUNT", 0.02f);
+                setParameterActual ("SOURCEBLEND", useGrandOrgue ? 0.18f : 0.46f);
+                setParameterActual ("FXMIX", 0.1f);
+                setParameterActual ("FXINTENSITY", 0.24f);
+                setParameterActual ("REVERBMIX", 0.12f);
+                setParameterActual ("DELAYSEND", 0.0f);
                 break;
             default:
-                setParameterActual ("CUTOFF", 7600.0f);
-                setParameterActual ("FXMIX", 0.12f);
-                setParameterActual ("REVERBMIX", 0.14f);
+                setParameterActual ("CUTOFF", 5800.0f);
+                setParameterActual ("RESONANCE", 0.04f);
+                setParameterActual ("AMPATTACK", 0.006f);
+                setParameterActual ("AMPRELEASE", 0.32f);
+                setParameterActual ("FILTERENVAMOUNT", 0.0f);
+                setParameterActual ("SOURCEBLEND", useGrandOrgue ? 0.16f : 0.42f);
+                setParameterActual ("FXMIX", 0.04f);
+                setParameterActual ("FXINTENSITY", 0.08f);
+                setParameterActual ("REVERBMIX", 0.22f);
+                setParameterActual ("DELAYSEND", 0.0f);
                 break;
         }
     }
@@ -9205,6 +10914,16 @@ void AdvancedVSTiAudioProcessor::parameterChanged (const juce::String& parameter
         return;
     }
 
+    if constexpr (isAcousticFlavor() && buildFlavor() != InstrumentFlavor::piano)
+    {
+        if (parameterID == "SAMPLEBANK")
+        {
+            pendingSampleBankRefresh.store (true);
+            triggerAsyncUpdate();
+            return;
+        }
+    }
+
     if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
     {
         if (parameterID.startsWith ("VECPADSELECT_"))
@@ -9219,9 +10938,19 @@ void AdvancedVSTiAudioProcessor::handleAsyncUpdate()
 {
     const auto presetIndex = pendingPresetIndex.exchange (-1);
     const auto shouldRefreshExternalPads = pendingExternalPadReload.exchange (false);
+    const auto shouldRefreshSampleBank = pendingSampleBankRefresh.exchange (false);
 
     if (presetIndex >= 0)
         applyPresetByIndex (presetIndex);
+
+    if constexpr (isAcousticFlavor() && buildFlavor() != InstrumentFlavor::piano)
+    {
+        if (shouldRefreshSampleBank)
+        {
+            initializeAcousticSampleLibrary (paramIndex (apvts, "SAMPLEBANK"));
+            refreshSampleBank();
+        }
+    }
 
     if constexpr (buildFlavor() == InstrumentFlavor::vec1DrumPad)
     {

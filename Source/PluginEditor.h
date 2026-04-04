@@ -92,6 +92,8 @@ private:
         ~KnobCard() override = default;
 
         void setScale (float scaleFactor);
+        void setMeterEnabled (bool shouldEnable);
+        void setMeterLevel (float newLevel);
         void resized() override;
         void paint (juce::Graphics&) override;
         [[nodiscard]] juce::Button* getToggleButton() noexcept;
@@ -106,7 +108,9 @@ private:
         AccentLookAndFeel& lookAndFeel;
         std::unique_ptr<LedToggleButton> toggleButton;
         bool compact = false;
+        bool meterEnabled = false;
         float scale = 1.0f;
+        float meterLevel = 0.0f;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KnobCard)
     };
@@ -378,6 +382,7 @@ private:
     int virusLowerFxLegendIndex = 0;
     int virusArpPageIndex = 0;
     int virusPanelModeIndex = 2;
+    int outputGainKnobIndex = -1;
     juce::String fixedInstrumentOsdTitle;
     juce::String fixedInstrumentOsdValue;
     double fixedInstrumentOsdUntilMs = 0.0;
