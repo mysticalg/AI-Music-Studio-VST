@@ -1,0 +1,67 @@
+[
+  {
+    "slug": "ai-delay",
+    "targetName": "AIDelay",
+    "productName": "AI Delay"
+  },
+  {
+    "slug": "ai-reverb",
+    "targetName": "AIReverb",
+    "productName": "AI Reverb"
+  },
+  {
+    "slug": "ai-chorus",
+    "targetName": "AIChorus",
+    "productName": "AI Chorus"
+  },
+  {
+    "slug": "ai-flanger",
+    "targetName": "AIFlanger",
+    "productName": "AI Flanger"
+  },
+  {
+    "slug": "ai-phaser",
+    "targetName": "AIPhaser",
+    "productName": "AI Phaser"
+  },
+  {
+    "slug": "ai-overdrive",
+    "targetName": "AIOverdrive",
+    "productName": "AI Overdrive"
+  },
+  {
+    "slug": "ai-distortion",
+    "targetName": "AIDistortion",
+    "productName": "AI Distortion"
+  },
+  {
+    "slug": "ai-compressor",
+    "targetName": "AICompressor",
+    "productName": "AI Compressor"
+  },
+  {
+    "slug": "ai-amp-emulator",
+    "targetName": "AIAmpEmulator",
+    "productName": "AI Amp Emulator"
+  },
+  {
+    "slug": "ai-bit-crusher",
+    "targetName": "AIBitCrusher",
+    "productName": "AI Bit Crusher"
+  },
+  {
+    "slug": "ai-rhythm-gate",
+    "targetName": "AIRhythmGate",
+    "productName": "AI Rhythm Gate"
+  },
+  {
+    "slug": "ai-graphic-eq",
+    "targetName": "AIGraphicEQ",
+    "productName": "AI Graphic EQ"
+  },
+  {
+    "slug": "ai-parametric-eq",
+    "targetName": "AIParametricEQ",
+    "productName": "AI Parametric EQ"
+  }
+]

@@ -12,8 +12,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CATALOG_PATH = REPO_ROOT / "docs" / "data" / "instruments.json"
 
 
-def load_catalog() -> list[dict]:
-    return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+def load_catalog(catalog_path: Path) -> list[dict]:
+    return json.loads(catalog_path.read_text(encoding="utf-8"))
 
 
 def find_single(root: Path, pattern: str) -> Path:
@@ -63,23 +63,33 @@ def prune_unlisted_children(root: Path, allowed_names: set[str]) -> None:
         remove_path(child)
 
 
-def package_platform_builds(build_dir: Path, platform: str, output_dir: Path) -> None:
+def package_platform_builds(
+    build_dir: Path,
+    platform: str,
+    output_dir: Path,
+    catalog_path: Path,
+    package_formats: tuple[str, ...],
+) -> None:
     standalone_suffix = ".app" if platform == "macos" else ".exe"
-    catalog = load_catalog()
+    catalog = load_catalog(catalog_path)
     expected_slugs = {instrument["slug"] for instrument in catalog}
 
-    prune_unlisted_children(output_dir / "vst3", expected_slugs)
-    prune_unlisted_children(output_dir / "standalone", expected_slugs)
+    if "vst3" in package_formats:
+        prune_unlisted_children(output_dir / "vst3", expected_slugs)
+    if "standalone" in package_formats:
+        prune_unlisted_children(output_dir / "standalone", expected_slugs)
 
     for instrument in catalog:
         product_name = instrument["productName"]
         slug = instrument["slug"]
 
-        vst3_source = find_single(build_dir, f"{product_name}.vst3")
-        standalone_source = find_single(build_dir, f"{product_name}{standalone_suffix}")
+        if "vst3" in package_formats:
+            vst3_source = find_single(build_dir, f"{product_name}.vst3")
+            copy_artifact(vst3_source, output_dir / "vst3" / slug / vst3_source.name)
 
-        copy_artifact(vst3_source, output_dir / "vst3" / slug / vst3_source.name)
-        copy_artifact(standalone_source, output_dir / "standalone" / slug / standalone_source.name)
+        if "standalone" in package_formats:
+            standalone_source = find_single(build_dir, f"{product_name}{standalone_suffix}")
+            copy_artifact(standalone_source, output_dir / "standalone" / slug / standalone_source.name)
 
 
 def main() -> int:
@@ -87,9 +97,17 @@ def main() -> int:
     parser.add_argument("--build-dir", required=True, type=Path)
     parser.add_argument("--platform", required=True, choices=("windows", "macos"))
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--catalog", type=Path, default=CATALOG_PATH,
+                        help="Catalog JSON describing the products to package.")
+    parser.add_argument("--formats", nargs="+", choices=("vst3", "standalone"), default=("vst3", "standalone"),
+                        help="Artifact formats to collect.")
     args = parser.parse_args()
 
-    package_platform_builds(args.build_dir.resolve(), args.platform, args.output_dir.resolve())
+    package_platform_builds(args.build_dir.resolve(),
+                            args.platform,
+                            args.output_dir.resolve(),
+                            args.catalog.resolve(),
+                            tuple(args.formats))
     return 0
 
 

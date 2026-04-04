@@ -70,8 +70,8 @@ SHARED_DATA_SPECS = (
 )
 
 
-def load_catalog() -> list[dict]:
-    return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+def load_catalog(catalog_path: Path) -> list[dict]:
+    return json.loads(catalog_path.read_text(encoding="utf-8"))
 
 
 def detect_project_version() -> str:
@@ -134,9 +134,9 @@ def find_single_vst3_bundle(slug_root: Path) -> Path:
     return bundles[0]
 
 
-def discover_vst3_bundles(package_root: Path) -> dict[str, Path]:
+def discover_vst3_bundles(package_root: Path, catalog: list[dict]) -> dict[str, Path]:
     bundles: dict[str, Path] = {}
-    for instrument in load_catalog():
+    for instrument in catalog:
         slug = instrument["slug"]
         slug_root = package_root / "vst3" / slug
         if not slug_root.is_dir():
@@ -145,9 +145,9 @@ def discover_vst3_bundles(package_root: Path) -> dict[str, Path]:
     return bundles
 
 
-def discover_standalone_roots(package_root: Path) -> dict[str, Path]:
+def discover_standalone_roots(package_root: Path, catalog: list[dict]) -> dict[str, Path]:
     standalones: dict[str, Path] = {}
-    for instrument in load_catalog():
+    for instrument in catalog:
         slug = instrument["slug"]
         slug_root = package_root / "standalone" / slug
         if not slug_root.is_dir():
@@ -261,12 +261,12 @@ def ensure_shared_data_available(
     raise FileNotFoundError(" ".join(message))
 
 
-def stage_vst3_bundles(bundles: dict[str, Path], staging_root: Path) -> list[dict[str, str]]:
+def stage_vst3_bundles(bundles: dict[str, Path], staging_root: Path, catalog: list[dict]) -> list[dict[str, str]]:
     staged_plugins: list[dict[str, str]] = []
     vst3_root = staging_root / "vst3"
     vst3_root.mkdir(parents=True, exist_ok=True)
 
-    for instrument in load_catalog():
+    for instrument in catalog:
         slug = instrument["slug"]
         bundle = bundles[slug]
         destination = vst3_root / bundle.name
@@ -282,12 +282,12 @@ def stage_vst3_bundles(bundles: dict[str, Path], staging_root: Path) -> list[dic
     return staged_plugins
 
 
-def stage_standalone_apps(standalone_roots: dict[str, Path], staging_root: Path) -> list[dict[str, str]]:
+def stage_standalone_apps(standalone_roots: dict[str, Path], staging_root: Path, catalog: list[dict]) -> list[dict[str, str]]:
     staged_apps: list[dict[str, str]] = []
     standalone_root = staging_root / "standalone"
     standalone_root.mkdir(parents=True, exist_ok=True)
 
-    for instrument in load_catalog():
+    for instrument in catalog:
         slug = instrument["slug"]
         source_root = standalone_roots[slug]
         destination_root = standalone_root / slug
@@ -396,22 +396,26 @@ def build_inno_script(
     staged_apps: list[dict[str, str]],
     staged_shared_data: list[dict[str, str]],
     manifest_path: Path,
+    app_name: str,
+    app_id_scope: str,
+    output_base_name: str,
+    default_dir_name: str,
 ) -> str:
-    app_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "ai-music-studio-bundled-vst3-installer")).upper()
-    output_base_name = f"AI-Music-Studio-Bundled-Instruments-Windows-Installer-{version}"
+    app_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, app_id_scope)).upper()
+    output_base_name = f"{output_base_name}-{version}"
     script_lines = [
         "#define StagingRoot \"" + inno_escape(staging_root) + "\"",
         "#define OutputRoot \"" + inno_escape(output_dir) + "\"",
         "",
         "[Setup]",
         f"AppId={{{{{app_id}}}}}",
-        'AppName=AI Music Studio Bundled Instruments',
+        f"AppName={app_name}",
         f"AppVersion={version}",
         "AppPublisher=AI Music Studio",
         "ArchitecturesAllowed=x64compatible",
         "ArchitecturesInstallIn64BitMode=x64compatible",
         "PrivilegesRequired=admin",
-        "DefaultDirName={commonpf64}\\AI Music Studio\\Bundled VST3",
+        f"DefaultDirName={default_dir_name}",
         "DisableDirPage=yes",
         "DisableProgramGroupPage=yes",
         "WizardStyle=modern",
@@ -566,11 +570,26 @@ def write_inno_script(
     staged_apps: list[dict[str, str]],
     staged_shared_data: list[dict[str, str]],
     manifest_path: Path,
+    app_name: str,
+    app_id_scope: str,
+    output_base_name: str,
+    default_dir_name: str,
+    script_name: str,
 ) -> Path:
-    script_path = output_dir / "AI-Music-Studio-Bundled-VST3.iss"
+    script_path = output_dir / script_name
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(
-        build_inno_script(version, output_dir, staging_root, staged_plugins, staged_apps, staged_shared_data, manifest_path),
+        build_inno_script(version,
+                          output_dir,
+                          staging_root,
+                          staged_plugins,
+                          staged_apps,
+                          staged_shared_data,
+                          manifest_path,
+                          app_name,
+                          app_id_scope,
+                          output_base_name,
+                          default_dir_name),
         encoding="utf-8",
     )
     return script_path
@@ -582,6 +601,8 @@ def compile_installer(script_path: Path, compiler: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stage and optionally compile a Windows installer for the bundled AI Music Studio VST3 instruments.")
+    parser.add_argument("--catalog", type=Path, default=CATALOG_PATH,
+                        help="Catalog JSON describing the products to include in the installer.")
     parser.add_argument("--package-root", type=Path, default=REPO_ROOT / "dist" / "release-input" / "windows",
                         help="Packaged Windows artifact root that contains the 'vst3/' layout from package_platform_builds.py.")
     parser.add_argument("--build-dir", type=Path, default=None,
@@ -590,6 +611,16 @@ def parse_args() -> argparse.Namespace:
                         help="Directory for the staged installer layout and final compiled installer.")
     parser.add_argument("--version", default=detect_project_version(),
                         help="Installer version string. Defaults to the CMake project version.")
+    parser.add_argument("--app-name", default="AI Music Studio Bundled Instruments",
+                        help="Installer display name.")
+    parser.add_argument("--app-id-scope", default="ai-music-studio-bundled-vst3-installer",
+                        help="Stable string used to derive the installer AppId.")
+    parser.add_argument("--output-base-name", default="AI-Music-Studio-Bundled-Instruments-Windows-Installer",
+                        help="Base filename for the compiled installer, without the version suffix.")
+    parser.add_argument("--script-name", default="AI-Music-Studio-Bundled-VST3.iss",
+                        help="Filename for the generated Inno Setup script.")
+    parser.add_argument("--default-dir-name", default=r"{commonpf64}\AI Music Studio\Bundled VST3",
+                        help="DefaultDirName value for the generated Inno Setup script.")
     parser.add_argument("--open-instrument-samples-dir", type=Path, default=None,
                         help="Optional explicit OpenInstrumentSamples source directory.")
     parser.add_argument("--piano-library-dir", type=Path, default=None,
@@ -598,6 +629,8 @@ def parse_args() -> argparse.Namespace:
                         help="Optional explicit VEC1 source directory.")
     parser.add_argument("--fetch-open-instrument-samples", action="store_true",
                         help="Download the open sample library automatically if it is required and not already available.")
+    parser.add_argument("--skip-standalone", action="store_true",
+                        help="Do not stage or install standalone application builds.")
     parser.add_argument("--skip-compile", action="store_true",
                         help="Only stage the installer files and write the .iss script.")
     parser.add_argument("--compiler", type=Path, default=None,
@@ -607,10 +640,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    catalog_path = args.catalog.resolve()
     package_root = args.package_root.resolve()
     output_dir = args.output_dir.resolve()
     staging_root = output_dir / "staging"
 
+    if not catalog_path.is_file():
+        raise FileNotFoundError(f"Catalog does not exist: {catalog_path}")
     if not package_root.is_dir():
         raise FileNotFoundError(f"Package root does not exist: {package_root}")
 
@@ -618,14 +654,28 @@ def main() -> int:
         shutil.rmtree(staging_root, onexc=handle_remove_readonly)
     staging_root.mkdir(parents=True, exist_ok=True)
 
+    catalog = load_catalog(catalog_path)
     cmake_cache = parse_cmake_cache(args.build_dir.resolve() if args.build_dir else None)
-    bundles = discover_vst3_bundles(package_root)
-    standalone_roots = discover_standalone_roots(package_root)
-    staged_plugins = stage_vst3_bundles(bundles, staging_root)
-    staged_apps = stage_standalone_apps(standalone_roots, staging_root)
+    bundles = discover_vst3_bundles(package_root, catalog)
+    staged_plugins = stage_vst3_bundles(bundles, staging_root, catalog)
+    staged_apps: list[dict[str, str]] = []
+    if not args.skip_standalone:
+        standalone_roots = discover_standalone_roots(package_root, catalog)
+        staged_apps = stage_standalone_apps(standalone_roots, staging_root, catalog)
     staged_shared_data = stage_shared_data(bundles, args, cmake_cache, staging_root)
     manifest_path = write_manifest(args.version, staged_plugins, staged_apps, staged_shared_data, staging_root)
-    script_path = write_inno_script(args.version, output_dir, staging_root, staged_plugins, staged_apps, staged_shared_data, manifest_path)
+    script_path = write_inno_script(args.version,
+                                    output_dir,
+                                    staging_root,
+                                    staged_plugins,
+                                    staged_apps,
+                                    staged_shared_data,
+                                    manifest_path,
+                                    args.app_name,
+                                    args.app_id_scope,
+                                    args.output_base_name,
+                                    args.default_dir_name,
+                                    args.script_name)
 
     if args.skip_compile:
         print(f"Staged installer files in {staging_root}")
