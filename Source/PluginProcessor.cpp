@@ -316,6 +316,16 @@ juce::StringArray delayDecayFilterChoices()
     return { "Off", "LP", "HP" };
 }
 
+juce::StringArray graphicEqModeChoices()
+{
+    return { "3 Band", "6 Band", "12 Band", "24 Band", "48 Band" };
+}
+
+juce::StringArray parametricEqModeChoices()
+{
+    return { "3 Band", "5 Band", "7 Band" };
+}
+
 double nativeFxTimingSecondsFromBpm (double bpm, int divisionIndex)
 {
     const auto safeBpm = juce::jlimit (20.0, 320.0, bpm > 1.0 ? bpm : 120.0);
@@ -1745,6 +1755,13 @@ bool AdvancedVSTiAudioProcessor::isNativeFxFlavor() const noexcept
     return isEffectFlavor();
 }
 
+float AdvancedVSTiAudioProcessor::getEqAnalyzerMagnitudeDb (bool postEq, int binIndex) const noexcept
+{
+    const auto clampedIndex = juce::jlimit (0, eqAnalyzerBinCountValue - 1, binIndex);
+    return postEq ? eqAnalyzerOutputMagnitudes[static_cast<size_t> (clampedIndex)].load()
+                  : eqAnalyzerInputMagnitudes[static_cast<size_t> (clampedIndex)].load();
+}
+
 bool AdvancedVSTiAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto mainOutput = layouts.getMainOutputChannelSet();
@@ -1886,6 +1903,8 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     loadedAcousticSampleBank = -1;
     acousticSampleLibrary.reset();
     cachedEqSettings.valid = false;
+    cachedGraphicEqSettings.valid = false;
+    cachedParametricEqSettings.valid = false;
     initializePianoSampleLibrary();
 
     juce::dsp::ProcessSpec spec { sampleRate, static_cast<juce::uint32> (samplesPerBlock), 1 };
@@ -1930,6 +1949,26 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     highEqRight.prepare (spec);
     highEqLeft.reset();
     highEqRight.reset();
+    for (auto& filter : graphicEqLeft)
+    {
+        filter.prepare (spec);
+        filter.reset();
+    }
+    for (auto& filter : graphicEqRight)
+    {
+        filter.prepare (spec);
+        filter.reset();
+    }
+    for (auto& filter : parametricEqLeft)
+    {
+        filter.prepare (spec);
+        filter.reset();
+    }
+    for (auto& filter : parametricEqRight)
+    {
+        filter.prepare (spec);
+        filter.reset();
+    }
     reverb.reset();
     compressorLeft.prepare (spec);
     compressorRight.prepare (spec);
@@ -1940,6 +1979,19 @@ void AdvancedVSTiAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     wetScratchBuffer.setSize (2, juce::jmax (1, samplesPerBlock), false, false, true);
     wetScratchBuffer.clear();
     delayWritePosition = 0;
+    eqAnalyzerInputFifo.fill (0.0f);
+    eqAnalyzerOutputFifo.fill (0.0f);
+    eqAnalyzerInputFftData.fill (0.0f);
+    eqAnalyzerOutputFftData.fill (0.0f);
+    eqAnalyzerInputFifoIndex = 0;
+    eqAnalyzerOutputFifoIndex = 0;
+    cachedEqSettings.valid = false;
+    cachedGraphicEqSettings.valid = false;
+    cachedParametricEqSettings.valid = false;
+    for (auto& value : eqAnalyzerInputMagnitudes)
+        value.store (-100.0f);
+    for (auto& value : eqAnalyzerOutputMagnitudes)
+        value.store (-100.0f);
 
     for (auto& voice : voices)
     {
@@ -1963,6 +2015,8 @@ void AdvancedVSTiAudioProcessor::releaseResources()
 {
     wetScratchBuffer.setSize (0, 0);
     cachedEqSettings.valid = false;
+    cachedGraphicEqSettings.valid = false;
+    cachedParametricEqSettings.valid = false;
 }
 
 void AdvancedVSTiAudioProcessor::reset()
@@ -2000,6 +2054,14 @@ void AdvancedVSTiAudioProcessor::reset()
     midEqRight.reset();
     highEqLeft.reset();
     highEqRight.reset();
+    for (auto& filter : graphicEqLeft)
+        filter.reset();
+    for (auto& filter : graphicEqRight)
+        filter.reset();
+    for (auto& filter : parametricEqLeft)
+        filter.reset();
+    for (auto& filter : parametricEqRight)
+        filter.reset();
     reverb.reset();
     compressorLeft.reset();
     compressorRight.reset();
@@ -2021,6 +2083,16 @@ void AdvancedVSTiAudioProcessor::reset()
     bitCrusherHeldLeft = 0.0f;
     bitCrusherHeldRight = 0.0f;
     bitCrusherCounter = 0;
+    eqAnalyzerInputFifo.fill (0.0f);
+    eqAnalyzerOutputFifo.fill (0.0f);
+    eqAnalyzerInputFftData.fill (0.0f);
+    eqAnalyzerOutputFftData.fill (0.0f);
+    eqAnalyzerInputFifoIndex = 0;
+    eqAnalyzerOutputFifoIndex = 0;
+    for (auto& value : eqAnalyzerInputMagnitudes)
+        value.store (-100.0f);
+    for (auto& value : eqAnalyzerOutputMagnitudes)
+        value.store (-100.0f);
 
     for (auto& voice : voices)
     {
@@ -5430,6 +5502,38 @@ void AdvancedVSTiAudioProcessor::updateRenderParameters()
     renderParams.sampleReduce = juce::jlimit (1, 32, paramIndex (apvts, "SAMPLEREDUCE"));
     renderParams.ampModel = paramIndex (apvts, "AMPMODEL");
     renderParams.gateFloor = paramValue (apvts, "GATEFLOOR");
+    if constexpr (buildFlavor() == InstrumentFlavor::graphicEqFx)
+    {
+        renderParams.graphicEqMode = paramIndex (apvts, "GRAPHICEQMODE");
+        for (int bandIndex = 0; bandIndex < maxGraphicEqBands; ++bandIndex)
+            renderParams.graphicEqBandGains[static_cast<size_t> (bandIndex)]
+                = paramValue (apvts, "GRAPHICEQGAIN" + juce::String (bandIndex + 1));
+    }
+    else
+    {
+        renderParams.graphicEqMode = 2;
+        renderParams.graphicEqBandGains.fill (0.0f);
+    }
+
+    if constexpr (buildFlavor() == InstrumentFlavor::parametricEqFx)
+    {
+        renderParams.parametricEqMode = paramIndex (apvts, "PARAMETRICEQMODE");
+        for (int bandIndex = 0; bandIndex < maxParametricEqBands; ++bandIndex)
+        {
+            const auto suffix = juce::String (bandIndex + 1);
+            renderParams.parametricEqBandGains[static_cast<size_t> (bandIndex)] = paramValue (apvts, "PARAMEQGAIN" + suffix);
+            renderParams.parametricEqBandFreqs[static_cast<size_t> (bandIndex)] = paramValue (apvts, "PARAMEQFREQ" + suffix);
+            renderParams.parametricEqBandQs[static_cast<size_t> (bandIndex)] = paramValue (apvts, "PARAMEQQ" + suffix);
+        }
+    }
+    else
+    {
+        renderParams.parametricEqMode = 1;
+        renderParams.parametricEqBandGains.fill (0.0f);
+        renderParams.parametricEqBandFreqs = { 90.0f, 220.0f, 600.0f, 1400.0f, 3200.0f, 7200.0f, 12000.0f };
+        renderParams.parametricEqBandQs = { 0.7f, 0.85f, 1.0f, 1.1f, 1.0f, 0.85f, 0.7f };
+    }
+
     if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
     {
         renderParams.timingSyncEnabled = paramIndex (apvts, "TIMEMODE") > 0;
@@ -6145,6 +6249,184 @@ void AdvancedVSTiAudioProcessor::refreshEqFiltersIfNeeded()
     cachedEqSettings.highEqQ = highEqQ;
 }
 
+int AdvancedVSTiAudioProcessor::graphicEqBandCountForModeIndex (int modeIndex) noexcept
+{
+    static constexpr std::array<int, 5> bandCounts { 3, 6, 12, 24, 48 };
+    return bandCounts[static_cast<size_t> (juce::jlimit (0, static_cast<int> (bandCounts.size()) - 1, modeIndex))];
+}
+
+int AdvancedVSTiAudioProcessor::parametricEqBandCountForModeIndex (int modeIndex) noexcept
+{
+    static constexpr std::array<int, 3> bandCounts { 3, 5, 7 };
+    return bandCounts[static_cast<size_t> (juce::jlimit (0, static_cast<int> (bandCounts.size()) - 1, modeIndex))];
+}
+
+float AdvancedVSTiAudioProcessor::graphicEqBandFrequency (int activeBandCount, int bandIndex) noexcept
+{
+    const auto clampedBandCount = juce::jmax (2, activeBandCount);
+    const auto clampedBandIndex = juce::jlimit (0, clampedBandCount - 1, bandIndex);
+    const auto ratio = std::pow (16000.0 / 40.0, 1.0 / static_cast<double> (clampedBandCount - 1));
+    return static_cast<float> (40.0 * std::pow (ratio, clampedBandIndex));
+}
+
+float AdvancedVSTiAudioProcessor::graphicEqBandQ (int activeBandCount) noexcept
+{
+    const auto clampedBandCount = juce::jmax (2, activeBandCount);
+    const auto ratio = std::pow (16000.0 / 40.0, 1.0 / static_cast<double> (clampedBandCount - 1));
+    return juce::jlimit (0.45f,
+                         8.0f,
+                         static_cast<float> (std::sqrt (ratio) / juce::jmax (0.001, ratio - 1.0)));
+}
+
+void AdvancedVSTiAudioProcessor::refreshGraphicEqFiltersIfNeeded()
+{
+    const auto modeIndex = juce::jlimit (0, 4, renderParams.graphicEqMode);
+    bool needsRefresh = ! cachedGraphicEqSettings.valid
+                        || std::abs (cachedGraphicEqSettings.sampleRate - currentSampleRate) > 0.5
+                        || cachedGraphicEqSettings.modeIndex != modeIndex;
+
+    if (! needsRefresh)
+    {
+        for (int bandIndex = 0; bandIndex < maxGraphicEqBands; ++bandIndex)
+        {
+            if (! nearlyEqual (cachedGraphicEqSettings.gains[static_cast<size_t> (bandIndex)],
+                               renderParams.graphicEqBandGains[static_cast<size_t> (bandIndex)]))
+            {
+                needsRefresh = true;
+                break;
+            }
+        }
+    }
+
+    if (! needsRefresh)
+        return;
+
+    const auto activeBandCount = graphicEqBandCountForModeIndex (modeIndex);
+    auto unity = juce::dsp::IIR::Coefficients<float>::makePeakFilter (currentSampleRate, 1000.0f, 1.0f, 1.0f);
+
+    for (int bandIndex = 0; bandIndex < maxGraphicEqBands; ++bandIndex)
+    {
+        juce::dsp::IIR::Coefficients<float>::Ptr coefficients = unity;
+
+        if (bandIndex < activeBandCount)
+        {
+            const auto frequency = graphicEqBandFrequency (activeBandCount, bandIndex);
+            const auto gain = juce::Decibels::decibelsToGain (renderParams.graphicEqBandGains[static_cast<size_t> (bandIndex)]);
+            const auto q = graphicEqBandQ (activeBandCount);
+
+            if (bandIndex == 0)
+                coefficients = juce::dsp::IIR::Coefficients<float>::makeLowShelf (currentSampleRate, frequency, 0.707f, gain);
+            else if (bandIndex == activeBandCount - 1)
+                coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (currentSampleRate, frequency, 0.707f, gain);
+            else
+                coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter (currentSampleRate, frequency, q, gain);
+        }
+
+        graphicEqLeft[static_cast<size_t> (bandIndex)].coefficients = coefficients;
+        graphicEqRight[static_cast<size_t> (bandIndex)].coefficients = coefficients;
+    }
+
+    cachedGraphicEqSettings.valid = true;
+    cachedGraphicEqSettings.sampleRate = currentSampleRate;
+    cachedGraphicEqSettings.modeIndex = modeIndex;
+    cachedGraphicEqSettings.gains = renderParams.graphicEqBandGains;
+}
+
+void AdvancedVSTiAudioProcessor::refreshParametricEqFiltersIfNeeded()
+{
+    const auto modeIndex = juce::jlimit (0, 2, renderParams.parametricEqMode);
+    bool needsRefresh = ! cachedParametricEqSettings.valid
+                        || std::abs (cachedParametricEqSettings.sampleRate - currentSampleRate) > 0.5
+                        || cachedParametricEqSettings.modeIndex != modeIndex;
+
+    if (! needsRefresh)
+    {
+        for (int bandIndex = 0; bandIndex < maxParametricEqBands; ++bandIndex)
+        {
+            const auto arrayIndex = static_cast<size_t> (bandIndex);
+            if (! nearlyEqual (cachedParametricEqSettings.gains[arrayIndex], renderParams.parametricEqBandGains[arrayIndex])
+                || ! nearlyEqual (cachedParametricEqSettings.freqs[arrayIndex], renderParams.parametricEqBandFreqs[arrayIndex])
+                || ! nearlyEqual (cachedParametricEqSettings.qs[arrayIndex], renderParams.parametricEqBandQs[arrayIndex]))
+            {
+                needsRefresh = true;
+                break;
+            }
+        }
+    }
+
+    if (! needsRefresh)
+        return;
+
+    const auto activeBandCount = parametricEqBandCountForModeIndex (modeIndex);
+    auto unity = juce::dsp::IIR::Coefficients<float>::makePeakFilter (currentSampleRate, 1000.0f, 1.0f, 1.0f);
+
+    for (int bandIndex = 0; bandIndex < maxParametricEqBands; ++bandIndex)
+    {
+        juce::dsp::IIR::Coefficients<float>::Ptr coefficients = unity;
+        if (bandIndex < activeBandCount)
+        {
+            const auto arrayIndex = static_cast<size_t> (bandIndex);
+            coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter (currentSampleRate,
+                                                                                juce::jlimit (20.0f, 20000.0f, renderParams.parametricEqBandFreqs[arrayIndex]),
+                                                                                juce::jlimit (0.3f, 12.0f, renderParams.parametricEqBandQs[arrayIndex]),
+                                                                                juce::Decibels::decibelsToGain (renderParams.parametricEqBandGains[arrayIndex]));
+        }
+
+        parametricEqLeft[static_cast<size_t> (bandIndex)].coefficients = coefficients;
+        parametricEqRight[static_cast<size_t> (bandIndex)].coefficients = coefficients;
+    }
+
+    cachedParametricEqSettings.valid = true;
+    cachedParametricEqSettings.sampleRate = currentSampleRate;
+    cachedParametricEqSettings.modeIndex = modeIndex;
+    cachedParametricEqSettings.gains = renderParams.parametricEqBandGains;
+    cachedParametricEqSettings.freqs = renderParams.parametricEqBandFreqs;
+    cachedParametricEqSettings.qs = renderParams.parametricEqBandQs;
+}
+
+void AdvancedVSTiAudioProcessor::performEqAnalyzerTransform (std::array<float, eqAnalyzerFftSize>& fifo,
+                                                             int& fifoIndex,
+                                                             std::array<float, eqAnalyzerFftSize * 2>& fftData,
+                                                             std::array<std::atomic<float>, eqAnalyzerBinCountValue>& destination)
+{
+    std::fill (fftData.begin(), fftData.end(), 0.0f);
+    std::copy (fifo.begin(), fifo.end(), fftData.begin());
+    eqAnalyzerWindow.multiplyWithWindowingTable (fftData.data(), eqAnalyzerFftSize);
+    eqAnalyzerFft.performFrequencyOnlyForwardTransform (fftData.data());
+
+    for (int binIndex = 0; binIndex < eqAnalyzerBinCountValue; ++binIndex)
+    {
+        const auto magnitude = fftData[static_cast<size_t> (binIndex)] / static_cast<float> (eqAnalyzerFftSize);
+        const auto decibels = juce::jlimit (-100.0f,
+                                            12.0f,
+                                            juce::Decibels::gainToDecibels (magnitude + 1.0e-6f) - 28.0f);
+        const auto smoothed = destination[static_cast<size_t> (binIndex)].load() * 0.8f + decibels * 0.2f;
+        destination[static_cast<size_t> (binIndex)].store (smoothed);
+    }
+
+    fifoIndex = 0;
+}
+
+void AdvancedVSTiAudioProcessor::updateEqAnalyzer (const juce::AudioBuffer<float>& buffer, bool postEq)
+{
+    if (buffer.getNumChannels() <= 0 || buffer.getNumSamples() <= 0)
+        return;
+
+    const auto* left = buffer.getReadPointer (0);
+    const auto* right = buffer.getReadPointer (juce::jmin (1, buffer.getNumChannels() - 1));
+    auto& fifo = postEq ? eqAnalyzerOutputFifo : eqAnalyzerInputFifo;
+    auto& fifoIndex = postEq ? eqAnalyzerOutputFifoIndex : eqAnalyzerInputFifoIndex;
+    auto& fftData = postEq ? eqAnalyzerOutputFftData : eqAnalyzerInputFftData;
+    auto& destination = postEq ? eqAnalyzerOutputMagnitudes : eqAnalyzerInputMagnitudes;
+
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        fifo[static_cast<size_t> (fifoIndex++)] = 0.5f * (left[sample] + right[sample]);
+        if (fifoIndex >= eqAnalyzerFftSize)
+            performEqAnalyzerTransform (fifo, fifoIndex, fftData, destination);
+    }
+}
+
 void AdvancedVSTiAudioProcessor::processNativeEffectBlock (juce::AudioBuffer<float>& buffer)
 {
     if (buffer.getNumChannels() < 2 || buffer.getNumSamples() <= 0)
@@ -6171,9 +6453,53 @@ void AdvancedVSTiAudioProcessor::processNativeEffectBlock (juce::AudioBuffer<flo
     auto* right = buffer.getWritePointer (1);
     const auto numSamples = buffer.getNumSamples();
 
+    if constexpr (buildFlavor() == InstrumentFlavor::graphicEqFx
+                  || buildFlavor() == InstrumentFlavor::parametricEqFx)
+    {
+        updateEqAnalyzer (buffer, false);
+    }
+
     buffer.applyGain (juce::Decibels::decibelsToGain (renderParams.inputGainDb));
 
-    if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
+    if constexpr (buildFlavor() == InstrumentFlavor::graphicEqFx)
+    {
+        refreshGraphicEqFiltersIfNeeded();
+        const auto activeBandCount = graphicEqBandCountForModeIndex (renderParams.graphicEqMode);
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            auto sampleLeft = left[sample];
+            auto sampleRight = right[sample];
+            for (int bandIndex = 0; bandIndex < activeBandCount; ++bandIndex)
+            {
+                sampleLeft = graphicEqLeft[static_cast<size_t> (bandIndex)].processSample (sampleLeft);
+                sampleRight = graphicEqRight[static_cast<size_t> (bandIndex)].processSample (sampleRight);
+            }
+
+            left[sample] = sampleLeft;
+            right[sample] = sampleRight;
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::parametricEqFx)
+    {
+        refreshParametricEqFiltersIfNeeded();
+        const auto activeBandCount = parametricEqBandCountForModeIndex (renderParams.parametricEqMode);
+
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            auto sampleLeft = left[sample];
+            auto sampleRight = right[sample];
+            for (int bandIndex = 0; bandIndex < activeBandCount; ++bandIndex)
+            {
+                sampleLeft = parametricEqLeft[static_cast<size_t> (bandIndex)].processSample (sampleLeft);
+                sampleRight = parametricEqRight[static_cast<size_t> (bandIndex)].processSample (sampleRight);
+            }
+
+            left[sample] = sampleLeft;
+            right[sample] = sampleRight;
+        }
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::delayFx)
     {
         const auto mix = juce::jlimit (0.0f, 1.0f, renderParams.fxMix);
         const auto feedbackLeft = juce::jlimit (0.0f, 0.96f, renderParams.delayFeedback);
@@ -6477,6 +6803,12 @@ void AdvancedVSTiAudioProcessor::processNativeEffectBlock (juce::AudioBuffer<flo
     }
 
     buffer.applyGain (juce::Decibels::decibelsToGain (renderParams.outputGainDb));
+
+    if constexpr (buildFlavor() == InstrumentFlavor::graphicEqFx
+                  || buildFlavor() == InstrumentFlavor::parametricEqFx)
+    {
+        updateEqAnalyzer (buffer, true);
+    }
 }
 
 void AdvancedVSTiAudioProcessor::applyEnvelopeSettings()
@@ -6624,6 +6956,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     int sampleReduceDefault = 4;
     int ampModelDefault = 0;
     float gateFloorDefault = 0.0f;
+    int graphicEqModeDefault = 2;
+    std::array<float, AdvancedVSTiAudioProcessor::maxGraphicEqBands> graphicEqGainDefaults {};
+    int parametricEqModeDefault = 1;
+    std::array<float, AdvancedVSTiAudioProcessor::maxParametricEqBands> parametricEqGainDefaults {};
+    std::array<float, AdvancedVSTiAudioProcessor::maxParametricEqBands> parametricEqFreqDefaults {
+        90.0f, 220.0f, 600.0f, 1400.0f, 3200.0f, 7200.0f, 12000.0f
+    };
+    std::array<float, AdvancedVSTiAudioProcessor::maxParametricEqBands> parametricEqQDefaults {
+        0.7f, 0.85f, 1.0f, 1.1f, 1.0f, 0.85f, 0.7f
+    };
     int timingModeDefault = 0;
     int timingDivisionDefault = 11;
     int delayRightDivisionDefault = 11;
@@ -7137,6 +7479,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
         fxSpreadDefault = 0.18f;
         timingDivisionDefault = 14;
     }
+    else if constexpr (buildFlavor() == InstrumentFlavor::graphicEqFx)
+    {
+        graphicEqModeDefault = 2;
+        inputGainDefault = 0.0f;
+        outputGainDefault = 0.0f;
+    }
+    else if constexpr (buildFlavor() == InstrumentFlavor::parametricEqFx)
+    {
+        parametricEqModeDefault = 1;
+        inputGainDefault = 0.0f;
+        outputGainDefault = 0.0f;
+    }
     else if constexpr (buildFlavor() == InstrumentFlavor::advanced)
     {
         oscDefault = 1;
@@ -7405,6 +7759,42 @@ juce::AudioProcessorValueTreeState::ParameterLayout AdvancedVSTiAudioProcessor::
     params.push_back (std::make_unique<juce::AudioParameterInt> ("SAMPLEREDUCE", "Sample Reduce", 1, 32, sampleReduceDefault));
     params.push_back (std::make_unique<juce::AudioParameterChoice> ("AMPMODEL", "Amp Model", juce::StringArray { "Clean", "Crunch", "Stack", "Bass" }, ampModelDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("GATEFLOOR", "Gate Floor", 0.0f, 1.0f, gateFloorDefault));
+    if constexpr (buildFlavor() == InstrumentFlavor::graphicEqFx)
+    {
+        params.push_back (std::make_unique<juce::AudioParameterChoice> ("GRAPHICEQMODE", "Graphic EQ Mode", graphicEqModeChoices(), graphicEqModeDefault));
+        for (int bandIndex = 0; bandIndex < AdvancedVSTiAudioProcessor::maxGraphicEqBands; ++bandIndex)
+        {
+            const auto suffix = juce::String (bandIndex + 1);
+            params.push_back (std::make_unique<juce::AudioParameterFloat> ("GRAPHICEQGAIN" + suffix,
+                                                                            "Graphic EQ Gain " + suffix,
+                                                                            -18.0f,
+                                                                            18.0f,
+                                                                            graphicEqGainDefaults[static_cast<size_t> (bandIndex)]));
+        }
+    }
+    if constexpr (buildFlavor() == InstrumentFlavor::parametricEqFx)
+    {
+        params.push_back (std::make_unique<juce::AudioParameterChoice> ("PARAMETRICEQMODE", "Parametric EQ Mode", parametricEqModeChoices(), parametricEqModeDefault));
+        const auto freqRange = juce::NormalisableRange<float> (20.0f, 20000.0f, 0.01f, 0.28f);
+        for (int bandIndex = 0; bandIndex < AdvancedVSTiAudioProcessor::maxParametricEqBands; ++bandIndex)
+        {
+            const auto suffix = juce::String (bandIndex + 1);
+            params.push_back (std::make_unique<juce::AudioParameterFloat> ("PARAMEQGAIN" + suffix,
+                                                                            "Param EQ Gain " + suffix,
+                                                                            -18.0f,
+                                                                            18.0f,
+                                                                            parametricEqGainDefaults[static_cast<size_t> (bandIndex)]));
+            params.push_back (std::make_unique<juce::AudioParameterFloat> ("PARAMEQFREQ" + suffix,
+                                                                            "Param EQ Freq " + suffix,
+                                                                            freqRange,
+                                                                            parametricEqFreqDefaults[static_cast<size_t> (bandIndex)]));
+            params.push_back (std::make_unique<juce::AudioParameterFloat> ("PARAMEQQ" + suffix,
+                                                                            "Param EQ Q " + suffix,
+                                                                            0.3f,
+                                                                            12.0f,
+                                                                            parametricEqQDefaults[static_cast<size_t> (bandIndex)]));
+        }
+    }
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYSEND", "Delay Send", 0.0f, 1.0f, delaySendDefault));
     params.push_back (std::make_unique<juce::AudioParameterFloat> ("DELAYTIME", "Delay Time", 0.05f, 1.2f, delayTimeDefault));
     if constexpr (buildFlavor() == InstrumentFlavor::delayFx)

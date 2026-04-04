@@ -252,6 +252,8 @@ add_ai_music_fx_vst3(AICompressor "AI Compressor" ACmp 107 com.aimusicstudio.aic
 add_ai_music_fx_vst3(AIAmpEmulator "AI Amp Emulator" AAmp 108 com.aimusicstudio.aiampemulator)
 add_ai_music_fx_vst3(AIBitCrusher "AI Bit Crusher" ABtc 109 com.aimusicstudio.aibitcrusher)
 add_ai_music_fx_vst3(AIRhythmGate "AI Rhythm Gate" ARgt 110 com.aimusicstudio.airhythmgate)
+add_ai_music_fx_vst3(AIGraphicEQ "AI Graphic EQ" AGEq 111 com.aimusicstudio.aigraphiceq)
+add_ai_music_fx_vst3(AIParametricEQ "AI Parametric EQ" APEq 112 com.aimusicstudio.aiparametriceq)
 
 if(AIMS_BUILD_SCREENSHOT_EXPORTERS)
   add_ai_music_screenshot_exporter(VirusSynth "Virus Synth" 0)

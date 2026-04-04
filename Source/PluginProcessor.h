@@ -78,6 +78,8 @@ public:
     void auditionPresetNote (int midiNote = 60, float velocity = 0.9f, int durationMs = 420);
     [[nodiscard]] VirusPresetMetadata getVirusPresetMetadata (int presetIndex) const;
     [[nodiscard]] bool isNativeFxFlavor() const noexcept;
+    [[nodiscard]] static constexpr int eqAnalyzerBinCount() noexcept { return eqAnalyzerBinCountValue; }
+    [[nodiscard]] float getEqAnalyzerMagnitudeDb (bool postEq, int binIndex) const noexcept;
 
     juce::AudioProcessorValueTreeState apvts;
 
@@ -109,11 +111,18 @@ private:
         compressorFx,
         ampEmulatorFx,
         bitCrusherFx,
-        rhythmGateFx
+        rhythmGateFx,
+        graphicEqFx,
+        parametricEqFx
     };
 
     static constexpr int drumVoiceLevelCount = 15;
     static constexpr int vecPadCount = 23;
+    static constexpr int maxGraphicEqBands = 48;
+    static constexpr int maxParametricEqBands = 7;
+    static constexpr int eqAnalyzerFftOrder = 11;
+    static constexpr int eqAnalyzerFftSize = 1 << eqAnalyzerFftOrder;
+    static constexpr int eqAnalyzerBinCountValue = eqAnalyzerFftSize / 2;
 
     enum class OscType
     {
@@ -369,6 +378,16 @@ private:
         int sampleReduce = 4;
         int ampModel = 0;
         float gateFloor = 0.0f;
+        int graphicEqMode = 2;
+        std::array<float, maxGraphicEqBands> graphicEqBandGains {};
+        int parametricEqMode = 1;
+        std::array<float, maxParametricEqBands> parametricEqBandGains {};
+        std::array<float, maxParametricEqBands> parametricEqBandFreqs {
+            90.0f, 220.0f, 600.0f, 1400.0f, 3200.0f, 7200.0f, 12000.0f
+        };
+        std::array<float, maxParametricEqBands> parametricEqBandQs {
+            0.7f, 0.85f, 1.0f, 1.1f, 1.0f, 0.85f, 0.7f
+        };
         bool timingSyncEnabled = false;
         int timingDivisionIndex = 11;
         float delaySend = 0.0f;
@@ -479,6 +498,24 @@ private:
         float highEqQ = 0.8f;
     };
 
+    struct GraphicEqSettingsSnapshot
+    {
+        bool valid = false;
+        double sampleRate = 0.0;
+        int modeIndex = 2;
+        std::array<float, maxGraphicEqBands> gains {};
+    };
+
+    struct ParametricEqSettingsSnapshot
+    {
+        bool valid = false;
+        double sampleRate = 0.0;
+        int modeIndex = 1;
+        std::array<float, maxParametricEqBands> gains {};
+        std::array<float, maxParametricEqBands> freqs {};
+        std::array<float, maxParametricEqBands> qs {};
+    };
+
     std::array<VoiceState, maxVoices> voices;
     RenderParameters renderParams;
 
@@ -519,6 +556,10 @@ private:
     juce::dsp::IIR::Filter<float> midEqRight;
     juce::dsp::IIR::Filter<float> highEqLeft;
     juce::dsp::IIR::Filter<float> highEqRight;
+    std::array<juce::dsp::IIR::Filter<float>, maxGraphicEqBands> graphicEqLeft {};
+    std::array<juce::dsp::IIR::Filter<float>, maxGraphicEqBands> graphicEqRight {};
+    std::array<juce::dsp::IIR::Filter<float>, maxParametricEqBands> parametricEqLeft {};
+    std::array<juce::dsp::IIR::Filter<float>, maxParametricEqBands> parametricEqRight {};
     juce::Reverb reverb;
     juce::dsp::Compressor<float> compressorLeft;
     juce::dsp::Compressor<float> compressorRight;
@@ -527,6 +568,8 @@ private:
     int delayWritePosition = 0;
     float currentFilterEnvPeak = 0.0f;
     EqSettingsSnapshot cachedEqSettings;
+    GraphicEqSettingsSnapshot cachedGraphicEqSettings;
+    ParametricEqSettingsSnapshot cachedParametricEqSettings;
     float delayFeedbackStateLeft = 0.0f;
     float delayFeedbackStateRight = 0.0f;
     float driveToneStateLeft = 0.0f;
@@ -542,6 +585,16 @@ private:
     float bitCrusherHeldLeft = 0.0f;
     float bitCrusherHeldRight = 0.0f;
     int bitCrusherCounter = 0;
+    juce::dsp::FFT eqAnalyzerFft { eqAnalyzerFftOrder };
+    juce::dsp::WindowingFunction<float> eqAnalyzerWindow { eqAnalyzerFftSize, juce::dsp::WindowingFunction<float>::hann, true };
+    std::array<float, eqAnalyzerFftSize> eqAnalyzerInputFifo {};
+    std::array<float, eqAnalyzerFftSize> eqAnalyzerOutputFifo {};
+    std::array<float, eqAnalyzerFftSize * 2> eqAnalyzerInputFftData {};
+    std::array<float, eqAnalyzerFftSize * 2> eqAnalyzerOutputFftData {};
+    std::array<std::atomic<float>, eqAnalyzerBinCountValue> eqAnalyzerInputMagnitudes {};
+    std::array<std::atomic<float>, eqAnalyzerBinCountValue> eqAnalyzerOutputMagnitudes {};
+    int eqAnalyzerInputFifoIndex = 0;
+    int eqAnalyzerOutputFifoIndex = 0;
 
     float lfo1Phase = 0.0f;
     float lfo2Phase = 0.0f;
@@ -623,6 +676,10 @@ private:
         return InstrumentFlavor::bitCrusherFx;
 #elif AIMS_INSTRUMENT_FLAVOR == 110
         return InstrumentFlavor::rhythmGateFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 111
+        return InstrumentFlavor::graphicEqFx;
+#elif AIMS_INSTRUMENT_FLAVOR == 112
+        return InstrumentFlavor::parametricEqFx;
 #else
         return InstrumentFlavor::advanced;
 #endif
@@ -640,7 +697,9 @@ private:
                || buildFlavor() == InstrumentFlavor::compressorFx
                || buildFlavor() == InstrumentFlavor::ampEmulatorFx
                || buildFlavor() == InstrumentFlavor::bitCrusherFx
-               || buildFlavor() == InstrumentFlavor::rhythmGateFx;
+               || buildFlavor() == InstrumentFlavor::rhythmGateFx
+               || buildFlavor() == InstrumentFlavor::graphicEqFx
+               || buildFlavor() == InstrumentFlavor::parametricEqFx;
     }
 
     [[nodiscard]] static constexpr bool isDrumFlavor() noexcept
@@ -772,7 +831,18 @@ private:
     void applyAdvancedEffects (juce::AudioBuffer<float>& buffer);
     void ensureWetScratchBufferSize (int numChannels, int numSamples);
     void refreshEqFiltersIfNeeded();
+    void refreshGraphicEqFiltersIfNeeded();
+    void refreshParametricEqFiltersIfNeeded();
     void processNativeEffectBlock (juce::AudioBuffer<float>& buffer);
+    void updateEqAnalyzer (const juce::AudioBuffer<float>& buffer, bool postEq);
+    void performEqAnalyzerTransform (std::array<float, eqAnalyzerFftSize>& fifo,
+                                     int& fifoIndex,
+                                     std::array<float, eqAnalyzerFftSize * 2>& fftData,
+                                     std::array<std::atomic<float>, eqAnalyzerBinCountValue>& destination);
+    [[nodiscard]] static int graphicEqBandCountForModeIndex (int modeIndex) noexcept;
+    [[nodiscard]] static int parametricEqBandCountForModeIndex (int modeIndex) noexcept;
+    [[nodiscard]] static float graphicEqBandFrequency (int activeBandCount, int bandIndex) noexcept;
+    [[nodiscard]] static float graphicEqBandQ (int activeBandCount) noexcept;
 
     void updateRenderParameters();
     void applyEnvelopeSettings();

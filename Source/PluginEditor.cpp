@@ -52,6 +52,88 @@ float logFrequencyNorm (float frequencyHz, float minimumHz = 40.0f, float maximu
     return clamp01 (static_cast<float> ((std::log (safeFrequency) - minLog) / (maxLog - minLog)));
 }
 
+bool isGraphicEqPluginName (const juce::String& name)
+{
+    return name.contains ("graphic eq");
+}
+
+bool isParametricEqPluginName (const juce::String& name)
+{
+    return name.contains ("parametric eq");
+}
+
+bool isEqPluginName (const juce::String& name)
+{
+    return isGraphicEqPluginName (name) || isParametricEqPluginName (name);
+}
+
+int graphicEqBandCountForModeIndex (int modeIndex)
+{
+    static constexpr std::array<int, 5> bandCounts { 3, 6, 12, 24, 48 };
+    return bandCounts[static_cast<size_t> (juce::jlimit (0, static_cast<int> (bandCounts.size()) - 1, modeIndex))];
+}
+
+int parametricEqBandCountForModeIndex (int modeIndex)
+{
+    static constexpr std::array<int, 3> bandCounts { 3, 5, 7 };
+    return bandCounts[static_cast<size_t> (juce::jlimit (0, static_cast<int> (bandCounts.size()) - 1, modeIndex))];
+}
+
+float graphicEqBandFrequencyPreview (int activeBandCount, int bandIndex)
+{
+    const auto clampedBandCount = juce::jmax (2, activeBandCount);
+    const auto clampedBandIndex = juce::jlimit (0, clampedBandCount - 1, bandIndex);
+    const auto ratio = std::pow (16000.0 / 40.0, 1.0 / static_cast<double> (clampedBandCount - 1));
+    return static_cast<float> (40.0 * std::pow (ratio, clampedBandIndex));
+}
+
+float graphicEqBandQPreview (int activeBandCount)
+{
+    const auto clampedBandCount = juce::jmax (2, activeBandCount);
+    const auto ratio = std::pow (16000.0 / 40.0, 1.0 / static_cast<double> (clampedBandCount - 1));
+    return juce::jlimit (0.45f,
+                         8.0f,
+                         static_cast<float> (std::sqrt (ratio) / juce::jmax (0.001, ratio - 1.0)));
+}
+
+juce::String formatEqFrequencyLabel (float frequencyHz)
+{
+    if (frequencyHz >= 1000.0f)
+    {
+        const auto kilohertz = frequencyHz / 1000.0f;
+        return juce::String (kilohertz, kilohertz < 10.0f ? 1 : 0) + "k";
+    }
+
+    return juce::String (juce::roundToInt (frequencyHz));
+}
+
+juce::dsp::IIR::Coefficients<float>::Ptr makeGraphicEqPreviewCoefficient (int bandIndex,
+                                                                          int activeBandCount,
+                                                                          float gainDb,
+                                                                          double sampleRate)
+{
+    const auto frequency = graphicEqBandFrequencyPreview (activeBandCount, bandIndex);
+    const auto gain = juce::Decibels::decibelsToGain (gainDb);
+    const auto q = graphicEqBandQPreview (activeBandCount);
+
+    if (bandIndex == 0)
+        return juce::dsp::IIR::Coefficients<float>::makeLowShelf (sampleRate, frequency, 0.707f, gain);
+    if (bandIndex == activeBandCount - 1)
+        return juce::dsp::IIR::Coefficients<float>::makeHighShelf (sampleRate, frequency, 0.707f, gain);
+    return juce::dsp::IIR::Coefficients<float>::makePeakFilter (sampleRate, frequency, q, gain);
+}
+
+juce::dsp::IIR::Coefficients<float>::Ptr makeParametricEqPreviewCoefficient (float frequencyHz,
+                                                                             float q,
+                                                                             float gainDb,
+                                                                             double sampleRate)
+{
+    return juce::dsp::IIR::Coefficients<float>::makePeakFilter (sampleRate,
+                                                                juce::jlimit (20.0f, 20000.0f, frequencyHz),
+                                                                juce::jlimit (0.3f, 12.0f, q),
+                                                                juce::Decibels::decibelsToGain (gainDb));
+}
+
 float previewLfoValue (int shape, float phase)
 {
     const auto wrapped = phase - std::floor (phase);
@@ -156,6 +238,10 @@ constexpr int kFixedInstrumentHeroGap = 18;
 constexpr int kFixedInstrumentFxHeroGap = 14;
 constexpr int kFixedInstrumentFxVisualizerHeight = 184;
 constexpr int kFixedInstrumentFxVisualizerGap = 20;
+constexpr int kGraphicEqVisualizerHeight = 286;
+constexpr int kGraphicEqControlAreaHeight = 214;
+constexpr int kParametricEqVisualizerHeight = 286;
+constexpr int kParametricEqControlAreaHeight = 248;
 constexpr int kFixedInstrumentChoiceWidth = 236;
 constexpr int kFixedInstrumentChoiceHeight = 82;
 constexpr int kFixedInstrumentChoiceGap = 16;
@@ -185,6 +271,24 @@ constexpr int kFixedDrumSectionPaddingTop = 14;
 constexpr int kFixedDrumSectionPaddingBottom = 8;
 constexpr int kFixedDrumLabelWidth = 74;
 constexpr int kFixedDrumSliderBottomTrim = 3;
+
+int nativeFxVisualizerHeightForPluginName (const juce::String& name)
+{
+    if (isGraphicEqPluginName (name))
+        return kGraphicEqVisualizerHeight;
+    if (isParametricEqPluginName (name))
+        return kParametricEqVisualizerHeight;
+    return kFixedInstrumentFxVisualizerHeight;
+}
+
+int eqControlAreaHeightForPluginName (const juce::String& name)
+{
+    if (isGraphicEqPluginName (name))
+        return kGraphicEqControlAreaHeight;
+    if (isParametricEqPluginName (name))
+        return kParametricEqControlAreaHeight;
+    return 0;
+}
 
 int fixedDrumKnobRowWidth (int knobCount)
 {
@@ -1340,6 +1444,253 @@ void AdvancedVSTiAudioProcessorEditor::ChoiceCard::syncButtonsFromCombo()
         optionButtons[index]->setToggleState (selected == index + 1, juce::dontSendNotification);
 }
 
+AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::GraphicEqBandControl (Theme themeToUse)
+    : theme (std::move (themeToUse))
+{
+    slider.setSliderStyle (juce::Slider::LinearVertical);
+    slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    slider.setColour (juce::Slider::backgroundColourId, theme.panel.brighter (0.04f));
+    slider.setColour (juce::Slider::trackColourId, theme.panelEdge.withAlpha (0.62f));
+    slider.setColour (juce::Slider::thumbColourId, theme.accent.brighter (0.18f));
+    slider.setColour (juce::Slider::rotarySliderFillColourId, theme.accent);
+    slider.setColour (juce::Slider::rotarySliderOutlineColourId, theme.panelEdge);
+    slider.setMouseDragSensitivity (180);
+    slider.onValueChange = [this] { updateValueLabel(); };
+    addAndMakeVisible (slider);
+
+    valueLabel.setJustificationType (juce::Justification::centred);
+    valueLabel.setColour (juce::Label::textColourId, theme.text.withAlpha (0.94f));
+    valueLabel.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (valueLabel);
+
+    bandLabel.setJustificationType (juce::Justification::centred);
+    bandLabel.setColour (juce::Label::textColourId, theme.hint.withAlpha (0.96f));
+    bandLabel.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (bandLabel);
+
+    updateMetrics();
+    updateValueLabel();
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::setScale (float scaleFactor)
+{
+    scale = juce::jlimit (0.72f, 1.4f, scaleFactor);
+    updateMetrics();
+    resized();
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::setBandLabel (const juce::String& text)
+{
+    bandLabel.setText (text, juce::dontSendNotification);
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::setBandLabelVisible (bool shouldBeVisible)
+{
+    bandLabelVisible = shouldBeVisible;
+    bandLabel.setVisible (shouldBeVisible);
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::setValueLabelVisible (bool shouldBeVisible)
+{
+    valueLabelVisible = shouldBeVisible;
+    valueLabel.setVisible (shouldBeVisible);
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::updateMetrics()
+{
+    valueLabel.setFont (juce::Font (9.2f * scale, juce::Font::bold));
+    bandLabel.setFont (juce::Font (8.4f * scale, juce::Font::plain));
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::updateValueLabel()
+{
+    const auto value = slider.getValue();
+    juce::String text;
+    if (std::abs (value) < 0.05)
+        text = "0.0";
+    else if (value > 0.0)
+        text = "+" + juce::String (value, 1);
+    else
+        text = juce::String (value, 1);
+
+    valueLabel.setText (text, juce::dontSendNotification);
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::paint (juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat().reduced (1.0f);
+    const auto radius = scaledFloat (10.0f, scale);
+    g.setColour (theme.panel.withAlpha (0.94f));
+    g.fillRoundedRectangle (area, radius);
+    g.setColour (theme.panelEdge.withAlpha (0.72f));
+    g.drawRoundedRectangle (area, radius, 1.0f);
+
+    auto meterArea = area.reduced (scaledFloat (6.0f, scale), scaledFloat (18.0f, scale));
+    meterArea.removeFromTop (scaledFloat (12.0f, scale));
+    meterArea.removeFromBottom (scaledFloat (16.0f, scale));
+    const auto zeroY = juce::jmap (0.5f, meterArea.getBottom(), meterArea.getY());
+    g.setColour (theme.text.withAlpha (0.16f));
+    g.drawHorizontalLine (juce::roundToInt (zeroY), meterArea.getX(), meterArea.getRight());
+}
+
+void AdvancedVSTiAudioProcessorEditor::GraphicEqBandControl::resized()
+{
+    auto area = getLocalBounds().reduced (scaledInt (4.0f, scale));
+    const int valueHeight = valueLabelVisible ? scaledInt (16.0f, scale) : 0;
+    const int labelHeight = bandLabelVisible ? scaledInt (14.0f, scale) : 0;
+    valueLabel.setBounds (valueLabelVisible ? area.removeFromTop (valueHeight) : juce::Rectangle<int> {});
+    if (valueHeight > 0)
+        area.removeFromTop (scaledInt (2.0f, scale));
+    bandLabel.setBounds (bandLabelVisible ? area.removeFromBottom (labelHeight) : juce::Rectangle<int> {});
+    if (labelHeight > 0)
+        area.removeFromBottom (scaledInt (2.0f, scale));
+    slider.setBounds (area);
+}
+
+AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::ParametricEqBandControl (Theme themeToUse, int bandNumber)
+    : theme (std::move (themeToUse))
+{
+    bandLabel.setText ("BAND " + juce::String (bandNumber), juce::dontSendNotification);
+    bandLabel.setJustificationType (juce::Justification::centred);
+    bandLabel.setColour (juce::Label::textColourId, theme.text.withAlpha (0.96f));
+    bandLabel.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (bandLabel);
+
+    configureTitleLabel (freqTitleLabel, "FREQ");
+    configureTitleLabel (gainTitleLabel, "GAIN");
+    configureTitleLabel (qTitleLabel, "Q");
+    configureValueLabel (freqValueLabel);
+    configureValueLabel (gainValueLabel);
+    configureValueLabel (qValueLabel);
+
+    configureSlider (freqSlider);
+    configureSlider (gainSlider);
+    configureSlider (qSlider);
+    addAndMakeVisible (freqSlider);
+    addAndMakeVisible (gainSlider);
+    addAndMakeVisible (qSlider);
+
+    freqSlider.onValueChange = [this] { updateValueLabels(); };
+    gainSlider.onValueChange = [this] { updateValueLabels(); };
+    qSlider.onValueChange = [this] { updateValueLabels(); };
+
+    updateMetrics();
+    updateValueLabels();
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::setScale (float scaleFactor)
+{
+    scale = juce::jlimit (0.76f, 1.3f, scaleFactor);
+    updateMetrics();
+    resized();
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::setBandTitle (const juce::String& text)
+{
+    bandLabel.setText (text, juce::dontSendNotification);
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::configureSlider (juce::Slider& sliderToConfigure)
+{
+    sliderToConfigure.setSliderStyle (juce::Slider::LinearVertical);
+    sliderToConfigure.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    sliderToConfigure.setColour (juce::Slider::backgroundColourId, theme.panel.brighter (0.03f));
+    sliderToConfigure.setColour (juce::Slider::trackColourId, theme.panelEdge.withAlpha (0.68f));
+    sliderToConfigure.setColour (juce::Slider::thumbColourId, theme.accent.brighter (0.12f));
+    sliderToConfigure.setColour (juce::Slider::rotarySliderFillColourId, theme.accent);
+    sliderToConfigure.setColour (juce::Slider::rotarySliderOutlineColourId, theme.panelEdge);
+    sliderToConfigure.setMouseDragSensitivity (185);
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::configureValueLabel (juce::Label& label)
+{
+    label.setJustificationType (juce::Justification::centred);
+    label.setColour (juce::Label::textColourId, theme.hint.withAlpha (0.98f));
+    label.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (label);
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::configureTitleLabel (juce::Label& label, const juce::String& text)
+{
+    label.setText (text, juce::dontSendNotification);
+    label.setJustificationType (juce::Justification::centred);
+    label.setColour (juce::Label::textColourId, theme.text.withAlpha (0.92f));
+    label.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (label);
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::updateMetrics()
+{
+    bandLabel.setFont (juce::Font (10.0f * scale, juce::Font::bold));
+    for (auto* title : { &freqTitleLabel, &gainTitleLabel, &qTitleLabel })
+        title->setFont (juce::Font (8.4f * scale, juce::Font::bold));
+    for (auto* value : { &freqValueLabel, &gainValueLabel, &qValueLabel })
+        value->setFont (juce::Font (8.4f * scale, juce::Font::plain));
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::updateValueLabels()
+{
+    freqValueLabel.setText (formatEqFrequencyLabel (static_cast<float> (freqSlider.getValue())), juce::dontSendNotification);
+
+    const auto gainValue = gainSlider.getValue();
+    juce::String gainText;
+    if (std::abs (gainValue) < 0.05)
+        gainText = "0.0";
+    else if (gainValue > 0.0)
+        gainText = "+" + juce::String (gainValue, 1);
+    else
+        gainText = juce::String (gainValue, 1);
+    gainValueLabel.setText (gainText, juce::dontSendNotification);
+    qValueLabel.setText (juce::String (qSlider.getValue(), 2), juce::dontSendNotification);
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::layoutMiniStrip (juce::Rectangle<int> area,
+                                                                                  juce::Label& titleLabelToLayout,
+                                                                                  juce::Slider& sliderToLayout,
+                                                                                  juce::Label& valueLabelToLayout)
+{
+    titleLabelToLayout.setBounds (area.removeFromTop (scaledInt (14.0f, scale)));
+    area.removeFromTop (scaledInt (4.0f, scale));
+    valueLabelToLayout.setBounds (area.removeFromBottom (scaledInt (14.0f, scale)));
+    area.removeFromBottom (scaledInt (3.0f, scale));
+    sliderToLayout.setBounds (area);
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::paint (juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat().reduced (1.0f);
+    const auto radius = scaledFloat (14.0f, scale);
+    g.setColour (theme.panel.withAlpha (0.95f));
+    g.fillRoundedRectangle (area, radius);
+    g.setColour (theme.panelEdge.withAlpha (0.72f));
+    g.drawRoundedRectangle (area, radius, 1.0f);
+
+    auto inner = area.reduced (scaledFloat (12.0f, scale), scaledFloat (36.0f, scale));
+    g.setColour (theme.text.withAlpha (0.08f));
+    const auto stripWidth = inner.getWidth() / 3.0f;
+    g.drawLine (inner.getX() + stripWidth, inner.getY(), inner.getX() + stripWidth, inner.getBottom(), 1.0f);
+    g.drawLine (inner.getX() + stripWidth * 2.0f, inner.getY(), inner.getX() + stripWidth * 2.0f, inner.getBottom(), 1.0f);
+}
+
+void AdvancedVSTiAudioProcessorEditor::ParametricEqBandControl::resized()
+{
+    auto area = getLocalBounds().reduced (scaledInt (8.0f, scale));
+    bandLabel.setBounds (area.removeFromTop (scaledInt (18.0f, scale)));
+    area.removeFromTop (scaledInt (6.0f, scale));
+
+    const int columnGap = scaledInt (8.0f, scale);
+    const int stripWidth = (area.getWidth() - columnGap * 2) / 3;
+    auto freqArea = area.removeFromLeft (stripWidth);
+    area.removeFromLeft (columnGap);
+    auto gainArea = area.removeFromLeft (stripWidth);
+    area.removeFromLeft (columnGap);
+    auto qArea = area;
+
+    layoutMiniStrip (freqArea, freqTitleLabel, freqSlider, freqValueLabel);
+    layoutMiniStrip (gainArea, gainTitleLabel, gainSlider, gainValueLabel);
+    layoutMiniStrip (qArea, qTitleLabel, qSlider, qValueLabel);
+}
+
 AdvancedVSTiAudioProcessorEditor::DrumPad::DrumPad (
     AccentLookAndFeel& lf,
     const juce::String& titleText,
@@ -1680,6 +2031,54 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
             const bool nativeFxLayout = audioProcessor.isNativeFxFlavor();
             const int heroHeight = nativeFxLayout ? kFixedInstrumentFxHeroHeight : kFixedInstrumentHeroHeight;
             const int heroGap = nativeFxLayout ? kFixedInstrumentFxHeroGap : kFixedInstrumentHeroGap;
+            const auto pluginName = normalizedPluginName (audioProcessor);
+            const int nativeVisualizerHeight = nativeFxLayout ? nativeFxVisualizerHeightForPluginName (pluginName) : 0;
+            const int eqControlHeight = eqControlAreaHeightForPluginName (pluginName);
+
+            if (isGraphicEqPlugin())
+            {
+                defaultWidth = 1460;
+                defaultHeight = kFixedInstrumentOuterPadding
+                                + heroHeight
+                                + heroGap
+                                + (choiceCards.isEmpty() ? 0 : (kFixedInstrumentChoiceHeight + kFixedInstrumentChoiceBottomGap))
+                                + nativeVisualizerHeight
+                                + kFixedInstrumentFxVisualizerGap
+                                + eqControlHeight
+                                + kFixedInstrumentKnobRowHeight
+                                + kFixedInstrumentBottomPadding;
+                minWidth = defaultWidth;
+                minHeight = defaultHeight;
+                maxWidth = defaultWidth;
+                maxHeight = defaultHeight;
+                setResizable (false, false);
+                setResizeLimits (minWidth, minHeight, maxWidth, maxHeight);
+                setSize (defaultWidth, defaultHeight);
+                return;
+            }
+
+            if (isParametricEqPlugin())
+            {
+                defaultWidth = 1420;
+                defaultHeight = kFixedInstrumentOuterPadding
+                                + heroHeight
+                                + heroGap
+                                + (choiceCards.isEmpty() ? 0 : (kFixedInstrumentChoiceHeight + kFixedInstrumentChoiceBottomGap))
+                                + nativeVisualizerHeight
+                                + kFixedInstrumentFxVisualizerGap
+                                + eqControlHeight
+                                + kFixedInstrumentKnobRowHeight
+                                + kFixedInstrumentBottomPadding;
+                minWidth = defaultWidth;
+                minHeight = defaultHeight;
+                maxWidth = defaultWidth;
+                maxHeight = defaultHeight;
+                setResizable (false, false);
+                setResizeLimits (minWidth, minHeight, maxWidth, maxHeight);
+                setSize (defaultWidth, defaultHeight);
+                return;
+            }
+
             const int knobColumns = fixedInstrumentKnobColumns (knobCards.size(), audioProcessor.isNativeFxFlavor());
             const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);
             const int choiceRowWidth = choiceCards.isEmpty()
@@ -1695,7 +2094,7 @@ AdvancedVSTiAudioProcessorEditor::AdvancedVSTiAudioProcessorEditor (AdvancedVSTi
                             + heroHeight
                             + heroGap
                             + (choiceCards.isEmpty() ? 0 : (kFixedInstrumentChoiceHeight + kFixedInstrumentChoiceBottomGap))
-                            + (nativeFxLayout ? (kFixedInstrumentFxVisualizerHeight + kFixedInstrumentFxVisualizerGap) : 0)
+                            + (nativeFxLayout ? (nativeVisualizerHeight + kFixedInstrumentFxVisualizerGap) : 0)
                             + (knobRows * kFixedInstrumentKnobRowHeight)
                             + ((knobRows - 1) * kFixedInstrumentKnobRowGap)
                             + kFixedInstrumentBottomPadding;
@@ -1808,6 +2207,17 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
                 showVirusOsdForParam (paramId, title);
             };
         }
+        else if (spec.paramId == "GRAPHICEQMODE" || spec.paramId == "PARAMETRICEQMODE")
+        {
+            const auto priorOnChange = card->combo.onChange;
+            card->combo.onChange = [this, priorOnChange]
+            {
+                if (priorOnChange != nullptr)
+                    priorOnChange();
+                resized();
+                repaint();
+            };
+        }
         addAndMakeVisible (card);
     }
 
@@ -1844,6 +2254,72 @@ void AdvancedVSTiAudioProcessorEditor::buildEditor()
                 buttonAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (audioProcessor.apvts, spec.toggleParamId, *toggleButton));
         }
         addAndMakeVisible (card);
+    }
+
+    if (isGraphicEqPlugin())
+    {
+        for (int bandIndex = 0; bandIndex < 48; ++bandIndex)
+        {
+            const auto paramId = "GRAPHICEQGAIN" + juce::String (bandIndex + 1);
+            auto* band = graphicEqBandControls.add (new GraphicEqBandControl (theme));
+            band->setTooltip (buildControlTooltip ("Band " + juce::String (bandIndex + 1), "Fixed graphic EQ gain"));
+            band->slider.setTooltip (band->getTooltip());
+            const auto priorOnChange = band->slider.onValueChange;
+            band->slider.onValueChange = [this, paramId, bandIndex, priorOnChange]
+            {
+                if (priorOnChange != nullptr)
+                    priorOnChange();
+                showFixedInstrumentOsdForParam (paramId, "Band " + juce::String (bandIndex + 1));
+            };
+            sliderAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (audioProcessor.apvts,
+                                                                                                                  paramId,
+                                                                                                                  band->slider));
+            addAndMakeVisible (band);
+        }
+    }
+
+    if (isParametricEqPlugin())
+    {
+        for (int bandIndex = 0; bandIndex < 7; ++bandIndex)
+        {
+            const auto suffix = juce::String (bandIndex + 1);
+            auto* band = parametricEqBandControls.add (new ParametricEqBandControl (theme, bandIndex + 1));
+            band->setTooltip (buildControlTooltip ("Band " + suffix, "Frequency, gain, and Q for this bell band"));
+            band->freqSlider.setTooltip (buildControlTooltip ("Band " + suffix + " Freq", "Centre frequency"));
+            band->gainSlider.setTooltip (buildControlTooltip ("Band " + suffix + " Gain", "Boost / cut amount"));
+            band->qSlider.setTooltip (buildControlTooltip ("Band " + suffix + " Q", "Bandwidth / resonance"));
+            const auto priorFreqOnChange = band->freqSlider.onValueChange;
+            const auto priorGainOnChange = band->gainSlider.onValueChange;
+            const auto priorQOnChange = band->qSlider.onValueChange;
+            band->freqSlider.onValueChange = [this, suffix, priorFreqOnChange]
+            {
+                if (priorFreqOnChange != nullptr)
+                    priorFreqOnChange();
+                showFixedInstrumentOsdForParam ("PARAMEQFREQ" + suffix, "Band " + suffix + " Freq");
+            };
+            band->gainSlider.onValueChange = [this, suffix, priorGainOnChange]
+            {
+                if (priorGainOnChange != nullptr)
+                    priorGainOnChange();
+                showFixedInstrumentOsdForParam ("PARAMEQGAIN" + suffix, "Band " + suffix + " Gain");
+            };
+            band->qSlider.onValueChange = [this, suffix, priorQOnChange]
+            {
+                if (priorQOnChange != nullptr)
+                    priorQOnChange();
+                showFixedInstrumentOsdForParam ("PARAMEQQ" + suffix, "Band " + suffix + " Q");
+            };
+            sliderAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (audioProcessor.apvts,
+                                                                                                                  "PARAMEQFREQ" + suffix,
+                                                                                                                  band->freqSlider));
+            sliderAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (audioProcessor.apvts,
+                                                                                                                  "PARAMEQGAIN" + suffix,
+                                                                                                                  band->gainSlider));
+            sliderAttachments.push_back (std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (audioProcessor.apvts,
+                                                                                                                  "PARAMEQQ" + suffix,
+                                                                                                                  band->qSlider));
+            addAndMakeVisible (band);
+        }
     }
 
     if (usesDrumPadLayout() && ! isTribute909())
@@ -2007,6 +2483,21 @@ bool AdvancedVSTiAudioProcessorEditor::isTributeVirus() const noexcept
     return theme.tributeVirus;
 }
 
+bool AdvancedVSTiAudioProcessorEditor::isGraphicEqPlugin() const noexcept
+{
+    return isGraphicEqPluginName (normalizedPluginName (audioProcessor));
+}
+
+bool AdvancedVSTiAudioProcessorEditor::isParametricEqPlugin() const noexcept
+{
+    return isParametricEqPluginName (normalizedPluginName (audioProcessor));
+}
+
+bool AdvancedVSTiAudioProcessorEditor::isEqPlugin() const noexcept
+{
+    return isEqPluginName (normalizedPluginName (audioProcessor));
+}
+
 bool AdvancedVSTiAudioProcessorEditor::usesDrumPadLayout() const noexcept
 {
     const auto name = normalizedPluginName (audioProcessor);
@@ -2026,9 +2517,38 @@ bool AdvancedVSTiAudioProcessorEditor::usesStandalonePreviewKeyboard() const noe
            && ! audioProcessor.isNativeFxFlavor();
 }
 
+void AdvancedVSTiAudioProcessorEditor::updateEqAnalyzerHistory()
+{
+    if (! isEqPlugin())
+        return;
+
+    const auto binCount = AdvancedVSTiAudioProcessor::eqAnalyzerBinCount();
+    const auto sampleRate = audioProcessor.getSampleRate() > 10.0 ? audioProcessor.getSampleRate() : 44100.0;
+    const auto nyquist = sampleRate * 0.5;
+
+    for (int row = 0; row < eqHistoryRows; ++row)
+    {
+        const auto frequencyNorm = static_cast<float> (row) / static_cast<float> (juce::jmax (1, eqHistoryRows - 1));
+        const auto frequency = std::exp (std::log (40.0f) + frequencyNorm * (std::log (16000.0f) - std::log (40.0f)));
+        const auto mappedBin = juce::jlimit (0,
+                                             binCount - 1,
+                                             juce::roundToInt ((frequency / nyquist) * static_cast<double> (binCount - 1)));
+        eqInputHistory[static_cast<size_t> (eqHistoryWriteIndex)][static_cast<size_t> (row)]
+            = normalizedRange (audioProcessor.getEqAnalyzerMagnitudeDb (false, mappedBin), -100.0f, 6.0f);
+        eqOutputHistory[static_cast<size_t> (eqHistoryWriteIndex)][static_cast<size_t> (row)]
+            = normalizedRange (audioProcessor.getEqAnalyzerMagnitudeDb (true, mappedBin), -100.0f, 6.0f);
+    }
+
+    eqHistoryWriteIndex = (eqHistoryWriteIndex + 1) % eqHistoryColumns;
+    eqHistoryPrimed = eqHistoryPrimed || eqHistoryWriteIndex == 0;
+}
+
 void AdvancedVSTiAudioProcessorEditor::timerCallback()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (isEqPlugin())
+        updateEqAnalyzerHistory();
 
     if (audioProcessor.isNativeFxFlavor() && ! nativeFxVisualizerBounds.isEmpty())
         repaint (nativeFxVisualizerBounds.expanded (2));
@@ -4114,6 +4634,18 @@ AdvancedVSTiAudioProcessorEditor::Theme AdvancedVSTiAudioProcessorEditor::buildT
         return padMachine;
     }
 
+    if (name.contains ("graphic eq"))
+        return { "AI Graphic EQ", "Fixed-band tone shaping with switchable 3, 6, 12, 24, and 48 band layouts plus live input and output spectrum feedback.",
+                 juce::Colour::fromRGB (138, 224, 255), juce::Colour::fromRGB (56, 142, 189),
+                 juce::Colour::fromRGB (13, 18, 23), juce::Colour::fromRGB (21, 29, 37), juce::Colour::fromRGB (48, 82, 110),
+                 juce::Colours::white, juce::Colour::fromRGB (191, 211, 226) };
+
+    if (name.contains ("parametric eq"))
+        return { "AI Parametric EQ", "Bell-focused precision EQ with 3, 5, or 7 active bands, adjustable frequency and Q, and live before/after analysis.",
+                 juce::Colour::fromRGB (164, 237, 168), juce::Colour::fromRGB (71, 154, 76),
+                 juce::Colour::fromRGB (14, 20, 17), juce::Colour::fromRGB (22, 31, 26), juce::Colour::fromRGB (52, 96, 66),
+                 juce::Colours::white, juce::Colour::fromRGB (193, 221, 198) };
+
     if (name.contains ("delay"))
         return { "AI Delay", "Stereo native delay with tone-shaped feedback, crossfeed width, and mix staging for inserts and throws.",
                  juce::Colour::fromRGB (117, 214, 220), juce::Colour::fromRGB (55, 146, 154),
@@ -4310,6 +4842,18 @@ std::vector<AdvancedVSTiAudioProcessorEditor::ChoiceSpec> AdvancedVSTiAudioProce
     if (presetNames.size() > 1)
         specs.push_back ({ "PRESET", "Preset", isTributeVirus() ? "Performance memory" : "Classic bundled patch", presetNames, {}, false, 0 });
 
+    if (name.contains ("graphic eq"))
+    {
+        specs.push_back ({ "GRAPHICEQMODE", "Bands", "Choose fixed 3, 6, 12, 24, or 48 band spacing", parameterChoiceValues ("GRAPHICEQMODE"), {}, false, 0 });
+        return specs;
+    }
+
+    if (name.contains ("parametric eq"))
+    {
+        specs.push_back ({ "PARAMETRICEQMODE", "Bands", "Choose 3, 5, or 7 active bell bands", parameterChoiceValues ("PARAMETRICEQMODE"), {}, false, 0 });
+        return specs;
+    }
+
     if (name.contains ("delay"))
     {
         specs.push_back ({ "TIMEMODE", "Timing", "Free-rate or host-synced timing", parameterChoiceValues ("TIMEMODE"), {}, false, 0 });
@@ -4451,6 +4995,18 @@ std::vector<AdvancedVSTiAudioProcessorEditor::KnobSpec> AdvancedVSTiAudioProcess
 
     if (name.contains ("vec1"))
         return {};
+
+    if (name.contains ("graphic eq"))
+        return {
+            { "INPUTGAIN", "Input", "Pre-EQ gain trim" },
+            { "OUTPUTGAIN", "Output", "Post-EQ gain trim" },
+        };
+
+    if (name.contains ("parametric eq"))
+        return {
+            { "INPUTGAIN", "Input", "Pre-EQ gain trim" },
+            { "OUTPUTGAIN", "Output", "Post-EQ gain trim" },
+        };
 
     if (name.contains ("delay"))
         return {
@@ -4889,6 +5445,953 @@ std::vector<AdvancedVSTiAudioProcessorEditor::DrumPadSpec> AdvancedVSTiAudioProc
     specs.push_back (makePadSpec ("DRUMLEVEL_MARACA", {}, {}, "Maraca", "C#2", 49));
     specs.push_back (makePadSpec ("DRUMLEVEL_PERC", {}, {}, "Perc", "D2", 50));
     return specs;
+}
+
+void AdvancedVSTiAudioProcessorEditor::paintNativeFxVisualizer (juce::Graphics& g) const
+{
+    if (! audioProcessor.isNativeFxFlavor() || nativeFxVisualizerBounds.isEmpty())
+        return;
+
+    const auto name = normalizedPluginName (audioProcessor);
+    const auto panelFill = (theme.faceplate.isTransparent() ? theme.panel : theme.faceplate).withAlpha (0.94f);
+    const auto innerFill = theme.panel.withAlpha (0.72f);
+    const auto outline = theme.panelEdge.withAlpha (0.92f);
+    const auto gridColour = theme.panelEdge.withAlpha (0.16f);
+    const auto titleColour = theme.text.withAlpha (0.95f);
+    const auto hintColour = theme.hint.withAlpha (0.92f);
+    const auto primary = theme.accent.brighter (0.18f);
+    const auto secondary = theme.accentGlow.interpolatedWith (theme.text, 0.22f).withAlpha (0.95f);
+    const auto nowSeconds = static_cast<float> (juce::Time::getMillisecondCounterHiRes() * 0.00032);
+    auto panel = nativeFxVisualizerBounds.toFloat().reduced (2.0f);
+
+    g.setColour (juce::Colours::black.withAlpha (0.18f));
+    g.fillRoundedRectangle (panel.translated (0.0f, 2.0f), 18.0f);
+    g.setColour (panelFill);
+    g.fillRoundedRectangle (panel, 18.0f);
+    g.setColour (innerFill);
+    g.fillRoundedRectangle (panel.reduced (1.5f), 16.0f);
+    g.setColour (outline);
+    g.drawRoundedRectangle (panel, 18.0f, 1.1f);
+    g.setColour (theme.accent.withAlpha (0.2f));
+    g.fillRoundedRectangle (juce::Rectangle<float> (panel.getX() + 16.0f, panel.getY() + 12.0f, panel.getWidth() - 32.0f, 2.2f), 1.1f);
+
+    auto content = panel.reduced (18.0f, 16.0f);
+    auto header = content.removeFromTop (20.0f);
+    content.removeFromTop (6.0f);
+    auto plot = content;
+
+    const auto actualValue = [this] (const juce::String& paramId, float fallbackValue)
+    {
+        if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (audioProcessor.apvts.getParameter (paramId)))
+            return parameter->convertFrom0to1 (parameter->getValue());
+        return fallbackValue;
+    };
+
+    const auto choiceIndex = [this] (const juce::String& paramId, int fallbackValue)
+    {
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter (paramId)))
+            return choice->getIndex();
+        return fallbackValue;
+    };
+
+    const auto choiceText = [this] (const juce::String& paramId, const juce::String& fallbackValue)
+    {
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter (paramId)))
+        {
+            const auto index = juce::jlimit (0, choice->choices.size() - 1, choice->getIndex());
+            return choice->choices[index];
+        }
+        return fallbackValue;
+    };
+
+    const auto drawHeader = [&] (const juce::String& title, const juce::String& detail)
+    {
+        auto leftArea = header.removeFromLeft (juce::jmin (280.0f, header.getWidth() * 0.52f));
+        g.setFont (juce::Font (11.2f, juce::Font::bold));
+        g.setColour (titleColour);
+        g.drawFittedText (title.toUpperCase(), leftArea.toNearestInt(), juce::Justification::centredLeft, 1, 0.75f);
+        g.setFont (juce::Font (10.0f, juce::Font::plain));
+        g.setColour (hintColour);
+        g.drawFittedText (detail, header.toNearestInt(), juce::Justification::centredRight, 1, 0.72f);
+    };
+
+    const auto drawGrid = [&] (juce::Rectangle<float> area, int columns, int rows, bool emphasiseMidLine)
+    {
+        g.setColour (theme.background.brighter (0.03f).withAlpha (0.48f));
+        g.fillRoundedRectangle (area, 14.0f);
+        g.setColour (outline.withAlpha (0.38f));
+        g.drawRoundedRectangle (area, 14.0f, 0.9f);
+        g.setColour (gridColour);
+
+        for (int column = 1; column < columns; ++column)
+        {
+            const auto x = juce::jmap (static_cast<float> (column) / static_cast<float> (columns),
+                                       area.getX(), area.getRight());
+            g.drawVerticalLine (juce::roundToInt (x), area.getY() + 6.0f, area.getBottom() - 6.0f);
+        }
+
+        for (int row = 1; row < rows; ++row)
+        {
+            const auto y = juce::jmap (static_cast<float> (row) / static_cast<float> (rows),
+                                       area.getY(), area.getBottom());
+            g.drawHorizontalLine (juce::roundToInt (y), area.getX() + 6.0f, area.getRight() - 6.0f);
+        }
+
+        if (emphasiseMidLine)
+        {
+            g.setColour (theme.accent.withAlpha (0.2f));
+            g.drawHorizontalLine (juce::roundToInt (area.getCentreY()), area.getX() + 4.0f, area.getRight() - 4.0f);
+        }
+    };
+
+    const auto drawGainRail = [&] (juce::Rectangle<float> area, float gainDb, const juce::String& label, juce::Colour colour)
+    {
+        g.setColour (theme.panelEdge.withAlpha (0.42f));
+        g.drawRoundedRectangle (area, 4.0f, 0.9f);
+        auto fill = area.reduced (1.5f);
+        fill = fill.removeFromBottom (fill.getHeight() * normalizedRange (gainDb, -24.0f, 24.0f));
+        g.setColour (colour.withAlpha (0.85f));
+        g.fillRoundedRectangle (fill, 2.6f);
+        g.setFont (juce::Font (9.2f, juce::Font::bold));
+        g.setColour (hintColour);
+        g.drawFittedText (label, area.withY (area.getBottom() + 4.0f).withHeight (10.0f).toNearestInt(),
+                          juce::Justification::centred, 1, 0.7f);
+    };
+
+    const auto drawFrequencyGuides = [&] (juce::Rectangle<float> area)
+    {
+        g.setFont (juce::Font (8.8f, juce::Font::plain));
+        g.setColour (hintColour.withAlpha (0.75f));
+        for (float frequency : { 40.0f, 100.0f, 250.0f, 1000.0f, 4000.0f, 10000.0f, 16000.0f })
+        {
+            const auto x = juce::jmap (logFrequencyNorm (frequency), area.getX(), area.getRight());
+            g.drawVerticalLine (juce::roundToInt (x), area.getY() + 4.0f, area.getBottom() - 14.0f);
+            g.drawFittedText (formatEqFrequencyLabel (frequency),
+                              juce::Rectangle<int> (juce::roundToInt (x - 20.0f),
+                                                    juce::roundToInt (area.getBottom() - 13.0f),
+                                                    40,
+                                                    12),
+                              juce::Justification::centred,
+                              1,
+                              0.7f);
+        }
+    };
+
+    const auto drawAnalyzerTrace = [&] (juce::Rectangle<float> area, bool postEq, juce::Colour colour, float strokeWidth)
+    {
+        juce::Path trace;
+        const auto binCount = AdvancedVSTiAudioProcessor::eqAnalyzerBinCount();
+        const auto sampleRate = audioProcessor.getSampleRate() > 10.0 ? audioProcessor.getSampleRate() : 44100.0;
+        const auto nyquist = sampleRate * 0.5;
+
+        for (int pointIndex = 0; pointIndex <= 140; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 140.0f;
+            const auto frequency = std::exp (std::log (40.0f) + xNorm * (std::log (16000.0f) - std::log (40.0f)));
+            const auto bin = juce::jlimit (0,
+                                           binCount - 1,
+                                           juce::roundToInt ((frequency / nyquist) * static_cast<double> (binCount - 1)));
+            const auto magnitudeDb = audioProcessor.getEqAnalyzerMagnitudeDb (postEq, bin);
+            const auto point = plotPoint (area, xNorm, normalizedRange (magnitudeDb, -96.0f, 12.0f));
+            if (pointIndex == 0)
+                trace.startNewSubPath (point);
+            else
+                trace.lineTo (point);
+        }
+
+        g.setColour (colour);
+        g.strokePath (trace, juce::PathStrokeType (strokeWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    };
+
+    const auto drawEqSpectrogram = [&] (juce::Rectangle<float> area,
+                                        const std::array<std::array<float, eqHistoryRows>, eqHistoryColumns>& history,
+                                        const juce::String& label,
+                                        juce::Colour baseColour)
+    {
+        auto titleArea = area.removeFromLeft (48.0f);
+        g.setFont (juce::Font (8.8f, juce::Font::bold));
+        g.setColour (hintColour.withAlpha (0.88f));
+        g.drawFittedText (label, titleArea.toNearestInt(), juce::Justification::centredLeft, 1, 0.75f);
+
+        g.setColour (theme.background.brighter (0.04f).withAlpha (0.62f));
+        g.fillRoundedRectangle (area, 8.0f);
+        g.setColour (outline.withAlpha (0.5f));
+        g.drawRoundedRectangle (area, 8.0f, 0.9f);
+
+        const int availableColumns = eqHistoryPrimed ? eqHistoryColumns : juce::jmax (1, eqHistoryWriteIndex);
+        const auto cellWidth = area.getWidth() / static_cast<float> (juce::jmax (1, availableColumns));
+        const auto cellHeight = area.getHeight() / static_cast<float> (eqHistoryRows);
+
+        for (int column = 0; column < availableColumns; ++column)
+        {
+            const auto sourceIndex = eqHistoryPrimed ? ((eqHistoryWriteIndex + column) % eqHistoryColumns)
+                                                     : juce::jlimit (0, eqHistoryColumns - 1, column);
+            for (int row = 0; row < eqHistoryRows; ++row)
+            {
+                const auto magnitude = history[static_cast<size_t> (sourceIndex)][static_cast<size_t> (row)];
+                const auto alpha = 0.04f + magnitude * 0.78f;
+                const auto cellX = area.getX() + column * cellWidth;
+                const auto cellY = area.getBottom() - (row + 1) * cellHeight;
+                g.setColour (baseColour.withAlpha (alpha));
+                g.fillRect (juce::Rectangle<float> (cellX, cellY, cellWidth + 0.6f, cellHeight + 0.6f));
+            }
+        }
+    };
+
+    if (isEqPluginName (name))
+    {
+        const auto sampleRate = audioProcessor.getSampleRate() > 10.0 ? audioProcessor.getSampleRate() : 44100.0;
+        auto eqPlot = plot.reduced (10.0f, 6.0f);
+        auto spectrogramArea = eqPlot.removeFromBottom (94.0f);
+        eqPlot.removeFromBottom (10.0f);
+        drawGrid (eqPlot, 8, 6, true);
+        drawFrequencyGuides (eqPlot);
+
+        juce::Path responsePath;
+        std::vector<juce::dsp::IIR::Coefficients<float>::Ptr> coefficients;
+        std::vector<std::pair<float, float>> nodes;
+
+        if (isGraphicEqPluginName (name))
+        {
+            const auto modeIndex = choiceIndex ("GRAPHICEQMODE", 2);
+            const auto activeBandCount = graphicEqBandCountForModeIndex (modeIndex);
+            for (int bandIndex = 0; bandIndex < activeBandCount; ++bandIndex)
+            {
+                const auto suffix = juce::String (bandIndex + 1);
+                const auto gainDb = actualValue ("GRAPHICEQGAIN" + suffix, 0.0f);
+                const auto frequency = graphicEqBandFrequencyPreview (activeBandCount, bandIndex);
+                coefficients.push_back (makeGraphicEqPreviewCoefficient (bandIndex, activeBandCount, gainDb, sampleRate));
+                nodes.push_back ({ frequency, gainDb });
+            }
+
+            drawHeader ("Graphic EQ Response",
+                        juce::String (activeBandCount) + " bands | "
+                        + parameterValueText (audioProcessor.apvts, "INPUTGAIN") + " in | "
+                        + parameterValueText (audioProcessor.apvts, "OUTPUTGAIN") + " out");
+        }
+        else
+        {
+            const auto modeIndex = choiceIndex ("PARAMETRICEQMODE", 1);
+            const auto activeBandCount = parametricEqBandCountForModeIndex (modeIndex);
+            for (int bandIndex = 0; bandIndex < activeBandCount; ++bandIndex)
+            {
+                const auto suffix = juce::String (bandIndex + 1);
+                const auto frequency = actualValue ("PARAMEQFREQ" + suffix, 1000.0f);
+                const auto gainDb = actualValue ("PARAMEQGAIN" + suffix, 0.0f);
+                const auto q = actualValue ("PARAMEQQ" + suffix, 1.0f);
+                coefficients.push_back (makeParametricEqPreviewCoefficient (frequency, q, gainDb, sampleRate));
+                nodes.push_back ({ frequency, gainDb });
+            }
+
+            drawHeader ("Parametric EQ Response",
+                        juce::String (activeBandCount) + " bands | "
+                        + parameterValueText (audioProcessor.apvts, "INPUTGAIN") + " in | "
+                        + parameterValueText (audioProcessor.apvts, "OUTPUTGAIN") + " out");
+        }
+
+        for (int pointIndex = 0; pointIndex <= 160; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 160.0f;
+            const auto frequency = std::exp (std::log (40.0f) + xNorm * (std::log (16000.0f) - std::log (40.0f)));
+            double magnitude = 1.0;
+            for (const auto& coefficient : coefficients)
+                magnitude *= coefficient->getMagnitudeForFrequency (frequency, sampleRate);
+
+            const auto responseDb = juce::jlimit (-18.0f,
+                                                  18.0f,
+                                                  static_cast<float> (juce::Decibels::gainToDecibels (static_cast<float> (magnitude), -18.0f)));
+            const auto point = plotPoint (eqPlot, xNorm, normalizedRange (responseDb, -18.0f, 18.0f));
+            if (pointIndex == 0)
+                responsePath.startNewSubPath (point);
+            else
+                responsePath.lineTo (point);
+        }
+
+        drawAnalyzerTrace (eqPlot, false, theme.text.withAlpha (0.36f), 1.1f);
+        drawAnalyzerTrace (eqPlot, true, secondary.withAlpha (0.88f), 1.35f);
+        g.setColour (primary.withAlpha (0.94f));
+        g.strokePath (responsePath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        const auto zeroY = juce::jmap (0.5f, eqPlot.getBottom(), eqPlot.getY());
+        for (const auto& [frequency, gainDb] : nodes)
+        {
+            const auto x = juce::jmap (logFrequencyNorm (frequency), eqPlot.getX(), eqPlot.getRight());
+            const auto y = juce::jmap (normalizedRange (gainDb, -18.0f, 18.0f), eqPlot.getBottom(), eqPlot.getY());
+            g.setColour (secondary.withAlpha (0.2f));
+            g.drawLine (x, zeroY, x, y, 1.0f);
+
+            g.setColour (primary.withAlpha (0.92f));
+            g.fillEllipse (x - 4.0f, y - 4.0f, 8.0f, 8.0f);
+            g.setColour (theme.background.withAlpha (0.7f));
+            g.drawEllipse (x - 4.0f, y - 4.0f, 8.0f, 8.0f, 1.0f);
+        }
+
+        auto inputStrip = spectrogramArea.removeFromTop (spectrogramArea.getHeight() * 0.5f - 4.0f);
+        spectrogramArea.removeFromTop (8.0f);
+        auto outputStrip = spectrogramArea;
+        drawEqSpectrogram (inputStrip, eqInputHistory, "Input", theme.text.interpolatedWith (theme.panelEdge, 0.35f));
+        drawEqSpectrogram (outputStrip, eqOutputHistory, "Output", primary);
+        return;
+    }
+
+    if (name.contains ("delay"))
+    {
+        const auto syncEnabled = choiceIndex ("TIMEMODE", 0) > 0;
+        const auto timeLeft = actualValue ("DELAYTIME", 0.38f);
+        const auto timeRight = actualValue ("DELAYTIMERIGHT", 0.52f);
+        const auto feedbackLeft = clamp01 (actualValue ("DELAYFEEDBACK", 0.42f));
+        const auto feedbackRight = clamp01 (actualValue ("DELAYFEEDBACKRIGHT", 0.36f));
+        const auto leftSpacingNorm = syncEnabled ? normalizedRange (static_cast<float> (choiceIndex ("TIMEDIV", 11)), 0.0f, 15.0f)
+                                                 : normalizedRange (timeLeft, 0.05f, 1.2f);
+        const auto rightSpacingNorm = syncEnabled ? normalizedRange (static_cast<float> (choiceIndex ("DELAYDIVRIGHT", 10)), 0.0f, 15.0f)
+                                                  : normalizedRange (timeRight, 0.05f, 1.2f);
+        const auto cutoffLeft = actualValue ("DELAYCUTOFFLEFT", 8500.0f);
+        const auto cutoffRight = actualValue ("DELAYCUTOFFRIGHT", 6200.0f);
+        const auto summary = syncEnabled
+                                 ? ("Host sync " + choiceText ("TIMEDIV", "1/8") + " / " + choiceText ("DELAYDIVRIGHT", "1/16"))
+                                 : (juce::String (juce::roundToInt (timeLeft * 1000.0f)) + " ms / "
+                                    + juce::String (juce::roundToInt (timeRight * 1000.0f)) + " ms");
+        drawHeader ("Delay Tap Map", summary);
+        drawGrid (plot, 8, 4, false);
+
+        auto lanes = plot.reduced (14.0f, 12.0f);
+        auto topLane = lanes.removeFromTop (lanes.getHeight() * 0.5f - 6.0f);
+        lanes.removeFromTop (12.0f);
+        auto bottomLane = lanes;
+
+        const auto drawDelayLane = [&] (juce::Rectangle<float> lane,
+                                        const juce::String& laneLabel,
+                                        juce::Colour colour,
+                                        float spacingNorm,
+                                        float feedback,
+                                        int filterMode,
+                                        float cutoffHz)
+        {
+            auto labelArea = lane.removeFromLeft (28.0f);
+            g.setFont (juce::Font (9.8f, juce::Font::bold));
+            g.setColour (hintColour);
+            g.drawFittedText (laneLabel, labelArea.toNearestInt(), juce::Justification::centredLeft, 1);
+
+            const auto baselineY = lane.getBottom() - 8.0f;
+            g.setColour (theme.text.withAlpha (0.18f));
+            g.drawLine (lane.getX(), baselineY, lane.getRight(), baselineY, 1.0f);
+
+            const auto spacing = juce::jmap (spacingNorm, lane.getWidth() * 0.1f, lane.getWidth() * 0.32f);
+            float previousX = lane.getX();
+            float previousY = baselineY;
+            bool havePrevious = false;
+
+            for (int tapIndex = 0; tapIndex < 7; ++tapIndex)
+            {
+                const auto x = lane.getX() + spacing * static_cast<float> (tapIndex + 1);
+                if (x > lane.getRight() - 82.0f)
+                    break;
+
+                const auto amplitude = std::pow (feedback, static_cast<float> (tapIndex + 1));
+                const auto tipY = baselineY - lane.getHeight() * (0.14f + amplitude * 0.58f);
+
+                g.setColour (colour.withAlpha (0.36f + amplitude * 0.42f));
+                g.drawLine (x, baselineY, x, tipY, 2.0f);
+                g.drawLine (x, tipY, juce::jmin (lane.getRight() - 82.0f, x + spacing * 0.48f), baselineY, 1.2f);
+                g.fillEllipse (x - 2.4f, tipY - 2.4f, 4.8f, 4.8f);
+
+                if (havePrevious)
+                    g.drawLine (previousX, previousY, x, tipY, 1.4f);
+
+                previousX = x;
+                previousY = tipY;
+                havePrevious = true;
+            }
+
+            auto filterArea = juce::Rectangle<float> (lane.getRight() - 74.0f, lane.getY() + 2.0f, 70.0f, lane.getHeight() - 4.0f);
+            g.setColour (theme.panel.withAlpha (0.42f));
+            g.fillRoundedRectangle (filterArea, 8.0f);
+            g.setColour (theme.panelEdge.withAlpha (0.5f));
+            g.drawRoundedRectangle (filterArea, 8.0f, 0.9f);
+
+            auto filterGraph = filterArea.reduced (8.0f, 8.0f);
+            const auto cutoffNorm = logFrequencyNorm (cutoffHz, 80.0f, 18000.0f);
+            const auto cutX = juce::jmap (cutoffNorm, filterGraph.getX() + 6.0f, filterGraph.getRight() - 4.0f);
+            juce::Path filterPath;
+
+            if (filterMode == 1)
+            {
+                filterPath.startNewSubPath (filterGraph.getX(), filterGraph.getY() + 3.0f);
+                filterPath.lineTo (cutX, filterGraph.getY() + 3.0f);
+                filterPath.quadraticTo (cutX + 6.0f, filterGraph.getY() + 3.0f, filterGraph.getRight(), filterGraph.getBottom() - 2.0f);
+            }
+            else if (filterMode == 2)
+            {
+                filterPath.startNewSubPath (filterGraph.getX(), filterGraph.getBottom() - 2.0f);
+                filterPath.lineTo (cutX, filterGraph.getBottom() - 2.0f);
+                filterPath.quadraticTo (cutX + 6.0f, filterGraph.getBottom() - 2.0f, filterGraph.getRight(), filterGraph.getY() + 3.0f);
+            }
+            else
+            {
+                filterPath.startNewSubPath (filterGraph.getX(), filterGraph.getCentreY());
+                filterPath.lineTo (filterGraph.getRight(), filterGraph.getCentreY());
+            }
+
+            g.setColour (colour.withAlpha (0.84f));
+            g.strokePath (filterPath, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setFont (juce::Font (8.6f, juce::Font::bold));
+            g.setColour (hintColour);
+            g.drawFittedText (choiceText (laneLabel == "L" ? "DELAYFILTERLEFT" : "DELAYFILTERRIGHT", "Off").toUpperCase(),
+                              filterArea.removeFromBottom (10.0f).toNearestInt(),
+                              juce::Justification::centred, 1, 0.7f);
+        };
+
+        drawDelayLane (topLane, "L", primary, leftSpacingNorm, feedbackLeft, choiceIndex ("DELAYFILTERLEFT", 0), cutoffLeft);
+        drawDelayLane (bottomLane, "R", secondary, rightSpacingNorm, feedbackRight, choiceIndex ("DELAYFILTERRIGHT", 0), cutoffRight);
+        return;
+    }
+
+    if (name.contains ("reverb"))
+    {
+        const auto syncEnabled = choiceIndex ("TIMEMODE", 0) > 0;
+        const auto timeNorm = syncEnabled ? normalizedRange (static_cast<float> (choiceIndex ("TIMEDIV", 2)), 0.0f, 15.0f)
+                                          : normalizedRange (actualValue ("REVERBTIME", 0.58f), 0.1f, 1.0f);
+        const auto damping = clamp01 (actualValue ("REVERBDAMP", 0.34f));
+        const auto width = clamp01 (actualValue ("FXSPREAD", 0.62f));
+        const auto mix = clamp01 (actualValue ("FXMIX", 0.3f));
+        drawHeader ("Reverb Space Map", syncEnabled ? ("Tail synced to " + choiceText ("TIMEDIV", "1/4"))
+                                                    : ("Decay " + parameterValueText (audioProcessor.apvts, "REVERBTIME")));
+        drawGrid (plot, 8, 4, true);
+
+        auto graph = plot.reduced (14.0f, 14.0f);
+        const auto centreY = graph.getCentreY();
+        const auto tailRight = juce::jmap (timeNorm, graph.getX() + graph.getWidth() * 0.36f, graph.getRight());
+        juce::Path cloud;
+
+        for (int pointIndex = 0; pointIndex <= 88; ++pointIndex)
+        {
+            const auto t = static_cast<float> (pointIndex) / 88.0f;
+            const auto env = std::exp (-t * juce::jmap (timeNorm, 1.2f, 5.0f));
+            const auto x = juce::jmap (t, graph.getX(), tailRight);
+            const auto body = graph.getHeight() * (0.08f + mix * 0.18f) * env;
+            const auto spread = graph.getHeight() * (0.05f + width * 0.22f) * std::pow (env, 0.76f) * (1.0f - damping * 0.3f);
+            const auto y = centreY - body - spread;
+            if (pointIndex == 0)
+                cloud.startNewSubPath (x, y);
+            else
+                cloud.lineTo (x, y);
+        }
+
+        for (int pointIndex = 88; pointIndex >= 0; --pointIndex)
+        {
+            const auto t = static_cast<float> (pointIndex) / 88.0f;
+            const auto env = std::exp (-t * juce::jmap (timeNorm, 1.2f, 5.0f));
+            const auto x = juce::jmap (t, graph.getX(), tailRight);
+            const auto body = graph.getHeight() * (0.08f + mix * 0.18f) * env;
+            const auto spread = graph.getHeight() * (0.05f + width * 0.22f) * std::pow (env, 0.76f) * (1.0f - damping * 0.3f);
+            cloud.lineTo (x, centreY + body + spread);
+        }
+        cloud.closeSubPath();
+
+        g.setColour (theme.accentGlow.withAlpha (0.18f + mix * 0.22f));
+        g.fillPath (cloud);
+        g.setColour (primary.withAlpha (0.9f));
+        g.strokePath (cloud, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        for (int reflection = 0; reflection < 11; ++reflection)
+        {
+            const auto seed = static_cast<float> (reflection + 1);
+            const auto x = graph.getX() + 12.0f + seed * 18.0f;
+            const auto widthOffset = std::sin (seed * 1.7f) * graph.getHeight() * (0.05f + width * 0.08f);
+            const auto amp = (0.18f + mix * 0.32f) * std::pow (0.84f, seed);
+            g.setColour (secondary.withAlpha (0.18f + amp));
+            g.fillEllipse (x, centreY + widthOffset - amp * 22.0f, 4.0f + amp * 6.0f, 4.0f + amp * 6.0f);
+        }
+
+        g.setColour (theme.text.withAlpha (0.24f));
+        g.drawLine (tailRight, graph.getY() + 4.0f, tailRight, graph.getBottom() - 4.0f, 1.0f);
+        return;
+    }
+
+    if (name.contains ("chorus"))
+    {
+        const auto syncEnabled = choiceIndex ("TIMEMODE", 0) > 0;
+        const auto rateNorm = syncEnabled ? normalizedRange (static_cast<float> (choiceIndex ("TIMEDIV", 2)), 0.0f, 15.0f)
+                                          : normalizedRange (actualValue ("FXRATE", 0.55f), 0.02f, 12.0f);
+        const auto depth = clamp01 (actualValue ("FXINTENSITY", 0.36f));
+        const auto colour = clamp01 (actualValue ("FXCOLOUR", 0.56f));
+        const auto spread = clamp01 (actualValue ("FXSPREAD", 0.52f));
+        const auto voiceCount = juce::jlimit (3, 6, 3 + juce::roundToInt (spread * 3.0f));
+        drawHeader ("Chorus Voice Field", syncEnabled ? ("Synced " + choiceText ("TIMEDIV", "1/4"))
+                                                      : (parameterValueText (audioProcessor.apvts, "FXRATE")
+                                                         + " | " + juce::String (voiceCount) + " lanes"));
+        drawGrid (plot, 10, 4, true);
+
+        auto graph = plot.reduced (14.0f, 14.0f);
+        const auto amplitude = graph.getHeight() * (0.08f + depth * 0.18f);
+        const auto laneSpread = graph.getHeight() * (0.04f + spread * 0.2f);
+        const auto cycles = 1.2f + rateNorm * 2.6f;
+
+        for (int voiceIndex = 0; voiceIndex < voiceCount; ++voiceIndex)
+        {
+            const auto voiceMix = voiceCount <= 1 ? 0.0f : static_cast<float> (voiceIndex) / static_cast<float> (voiceCount - 1);
+            const auto laneOffset = juce::jmap (voiceMix, -laneSpread, laneSpread);
+            const auto phase = nowSeconds * (0.45f + rateNorm * 1.5f)
+                               + voiceMix * (0.22f + spread * 0.28f)
+                               + colour * 0.18f;
+            juce::Path voicePath;
+
+            for (int pointIndex = 0; pointIndex <= 96; ++pointIndex)
+            {
+                const auto xNorm = static_cast<float> (pointIndex) / 96.0f;
+                const auto x = juce::jmap (xNorm, graph.getX(), graph.getRight());
+                const auto y = graph.getCentreY()
+                               + laneOffset
+                               + std::sin ((xNorm * cycles + phase) * juce::MathConstants<float>::twoPi) * amplitude;
+
+                if (pointIndex == 0)
+                    voicePath.startNewSubPath (x, y);
+                else
+                    voicePath.lineTo (x, y);
+            }
+
+            const auto voiceColour = primary.interpolatedWith (secondary, voiceMix).withAlpha (0.34f + voiceMix * 0.28f);
+            g.setColour (voiceColour);
+            g.strokePath (voicePath, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour (voiceColour.withAlpha (0.8f));
+            g.fillEllipse (graph.getRight() - 10.0f, graph.getCentreY() + laneOffset - 3.0f, 6.0f, 6.0f);
+        }
+        return;
+    }
+
+    if (name.contains ("flanger"))
+    {
+        const auto syncEnabled = choiceIndex ("TIMEMODE", 0) > 0;
+        const auto rateNorm = syncEnabled ? normalizedRange (static_cast<float> (choiceIndex ("TIMEDIV", 1)), 0.0f, 15.0f)
+                                          : normalizedRange (actualValue ("FXRATE", 0.48f), 0.02f, 12.0f);
+        const auto depth = clamp01 (actualValue ("FXINTENSITY", 0.42f));
+        const auto colour = clamp01 (actualValue ("FXCOLOUR", 0.52f));
+        const auto spread = clamp01 (actualValue ("FXSPREAD", 0.58f));
+        drawHeader ("Flanger Comb Sweep", syncEnabled ? ("Synced " + choiceText ("TIMEDIV", "1/8"))
+                                                      : (parameterValueText (audioProcessor.apvts, "FXRATE")
+                                                         + " | " + parameterValueText (audioProcessor.apvts, "FXCOLOUR")));
+
+        auto graph = plot.reduced (14.0f, 12.0f);
+        auto sweepArea = graph.removeFromTop (graph.getHeight() * 0.28f);
+        graph.removeFromTop (10.0f);
+        drawGrid (graph, 10, 4, true);
+
+        juce::Path sweepPath;
+        const auto sweepCycles = 1.0f + rateNorm * 2.2f;
+        for (int pointIndex = 0; pointIndex <= 80; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 80.0f;
+            const auto x = juce::jmap (xNorm, sweepArea.getX(), sweepArea.getRight());
+            const auto y = sweepArea.getCentreY()
+                           + std::sin ((xNorm * sweepCycles + nowSeconds * (0.5f + rateNorm)) * juce::MathConstants<float>::twoPi)
+                                 * sweepArea.getHeight() * (0.12f + depth * 0.22f);
+            if (pointIndex == 0)
+                sweepPath.startNewSubPath (x, y);
+            else
+                sweepPath.lineTo (x, y);
+        }
+        g.setColour (secondary.withAlpha (0.84f));
+        g.strokePath (sweepPath, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        juce::Path combPath;
+        const auto teeth = 4.0f + colour * 8.0f;
+        const auto depthPixels = graph.getHeight() * (0.12f + depth * 0.24f);
+        for (int pointIndex = 0; pointIndex <= 120; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 120.0f;
+            const auto x = juce::jmap (xNorm, graph.getX(), graph.getRight());
+            const auto response = std::sin ((xNorm * teeth + nowSeconds * (0.34f + rateNorm * 0.9f)) * juce::MathConstants<float>::twoPi)
+                                  + 0.35f * std::sin ((xNorm * teeth * 2.0f) * juce::MathConstants<float>::twoPi);
+            const auto y = graph.getCentreY() + response * depthPixels * (0.6f + spread * 0.45f);
+            if (pointIndex == 0)
+                combPath.startNewSubPath (x, y);
+            else
+                combPath.lineTo (x, y);
+        }
+        g.setColour (primary.withAlpha (0.88f));
+        g.strokePath (combPath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        return;
+    }
+
+    if (name.contains ("phaser"))
+    {
+        const auto syncEnabled = choiceIndex ("TIMEMODE", 0) > 0;
+        const auto rateNorm = syncEnabled ? normalizedRange (static_cast<float> (choiceIndex ("TIMEDIV", 3)), 0.0f, 15.0f)
+                                          : normalizedRange (actualValue ("FXRATE", 0.42f), 0.02f, 12.0f);
+        const auto depth = clamp01 (actualValue ("FXINTENSITY", 0.38f));
+        const auto colour = clamp01 (actualValue ("FXCOLOUR", 0.5f));
+        const auto spread = clamp01 (actualValue ("FXSPREAD", 0.44f));
+        const auto notchCount = juce::jlimit (4, 8, 4 + juce::roundToInt (depth * 4.0f));
+        drawHeader ("Phaser Notch Sweep", syncEnabled ? ("Synced " + choiceText ("TIMEDIV", "1/2"))
+                                                      : (parameterValueText (audioProcessor.apvts, "FXRATE")
+                                                         + " | " + juce::String (notchCount) + " notches"));
+        drawGrid (plot, 10, 5, true);
+
+        auto graph = plot.reduced (14.0f, 14.0f);
+        const auto buildPhaserPath = [&] (float stereoOffset, juce::Colour colourTint)
+        {
+            juce::Path response;
+            for (int pointIndex = 0; pointIndex <= 132; ++pointIndex)
+            {
+                const auto xNorm = static_cast<float> (pointIndex) / 132.0f;
+                auto yNorm = 0.54f;
+
+                for (int notchIndex = 0; notchIndex < notchCount; ++notchIndex)
+                {
+                    const auto base = 0.16f + static_cast<float> (notchIndex) * (0.66f / static_cast<float> (juce::jmax (1, notchCount - 1)));
+                    const auto animated = 0.03f * std::sin (nowSeconds * (0.8f + rateNorm * 1.7f) + notchIndex * 0.8f);
+                    const auto centre = juce::jlimit (0.06f, 0.94f, base + (colour - 0.5f) * 0.2f + stereoOffset + animated);
+                    const auto width = 0.03f + spread * 0.018f;
+                    const auto dip = std::exp (-std::pow ((xNorm - centre) / width, 2.0f));
+                    yNorm -= dip * (0.08f + depth * 0.12f);
+                }
+
+                const auto point = plotPoint (graph, xNorm, yNorm);
+                if (pointIndex == 0)
+                    response.startNewSubPath (point);
+                else
+                    response.lineTo (point);
+            }
+
+            g.setColour (colourTint);
+            g.strokePath (response, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        };
+
+        buildPhaserPath (-spread * 0.08f, primary.withAlpha (0.88f));
+        buildPhaserPath (spread * 0.08f, secondary.withAlpha (0.62f));
+        return;
+    }
+
+    if (name.contains ("overdrive") || name.contains ("distortion"))
+    {
+        const auto driveAmount = clamp01 (actualValue ("DRIVE", name.contains ("overdrive") ? 0.38f : 0.58f));
+        const auto tone = clamp01 (actualValue ("TONE", 0.52f));
+        const auto mix = clamp01 (actualValue ("FXMIX", name.contains ("overdrive") ? 0.7f : 0.78f));
+        const auto bias = clamp01 (actualValue ("FXSPREAD", 0.3f));
+        const auto inputGain = actualValue ("INPUTGAIN", 0.0f);
+        const auto outputGain = actualValue ("OUTPUTGAIN", 0.0f);
+        const auto saturationType = choiceIndex ("SATURATIONTYPE", name.contains ("overdrive") ? 0 : 2);
+        drawHeader (name.contains ("overdrive") ? "Overdrive Transfer" : "Distortion Transfer",
+                    choiceText ("SATURATIONTYPE", "Soft") + " | " + parameterValueText (audioProcessor.apvts, "TONE"));
+        drawGrid (plot, 6, 6, true);
+
+        auto graph = plot.reduced (38.0f, 16.0f);
+        const auto midX = graph.getCentreX();
+        const auto midY = graph.getCentreY();
+        g.setColour (theme.text.withAlpha (0.22f));
+        g.drawLine (graph.getX(), midY, graph.getRight(), midY, 1.0f);
+        g.drawLine (midX, graph.getY(), midX, graph.getBottom(), 1.0f);
+
+        juce::Path dryPath;
+        dryPath.startNewSubPath (graph.getX(), graph.getBottom());
+        dryPath.lineTo (graph.getRight(), graph.getY());
+        g.setColour (theme.text.withAlpha (0.18f));
+        g.strokePath (dryPath, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        juce::Path wetPath;
+        const auto drive = name.contains ("overdrive") ? (1.4f + driveAmount * 14.0f) : (4.0f + driveAmount * 28.0f);
+        const auto asymmetry = name.contains ("distortion") ? (bias * 0.7f - 0.35f) : 0.0f;
+
+        for (int pointIndex = 0; pointIndex <= 112; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 112.0f;
+            const auto input = juce::jmap (xNorm, -1.0f, 1.0f);
+            auto output = previewSaturate (input + asymmetry, saturationType, drive);
+            if (name.contains ("distortion"))
+                output = juce::jlimit (-1.1f, 1.1f, output * 1.08f);
+
+            const auto point = plotPoint (graph, xNorm, normalizedRange (output, -1.1f, 1.1f));
+            if (pointIndex == 0)
+                wetPath.startNewSubPath (point);
+            else
+                wetPath.lineTo (point);
+        }
+
+        g.setColour (primary.withAlpha (0.85f + mix * 0.12f));
+        g.strokePath (wetPath, juce::PathStrokeType (2.1f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        auto toneArea = juce::Rectangle<float> (graph.getRight() - 116.0f, graph.getY() + 6.0f, 104.0f, 42.0f);
+        g.setColour (theme.panel.withAlpha (0.36f));
+        g.fillRoundedRectangle (toneArea, 8.0f);
+        g.setColour (theme.panelEdge.withAlpha (0.42f));
+        g.drawRoundedRectangle (toneArea, 8.0f, 0.8f);
+        juce::Path tonePath;
+        const auto cutX = juce::jmap (tone, toneArea.getX() + 20.0f, toneArea.getRight() - 10.0f);
+        tonePath.startNewSubPath (toneArea.getX() + 8.0f, toneArea.getY() + 10.0f);
+        tonePath.lineTo (cutX, toneArea.getY() + 10.0f);
+        tonePath.quadraticTo (cutX + 8.0f, toneArea.getY() + 10.0f, toneArea.getRight() - 8.0f, toneArea.getBottom() - 8.0f);
+        g.setColour (secondary.withAlpha (0.82f));
+        g.strokePath (tonePath, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        drawGainRail ({ plot.getX() + 10.0f, plot.getY() + 20.0f, 8.0f, plot.getHeight() - 42.0f }, inputGain, "IN", secondary);
+        drawGainRail ({ plot.getRight() - 18.0f, plot.getY() + 20.0f, 8.0f, plot.getHeight() - 42.0f }, outputGain, "OUT", primary);
+        return;
+    }
+
+    if (name.contains ("compress"))
+    {
+        const auto threshold = actualValue ("THRESHOLD", -20.0f);
+        const auto ratio = actualValue ("RATIO", 4.0f);
+        const auto attack = actualValue ("COMPATTACK", 18.0f);
+        const auto release = actualValue ("COMPRELEASE", 140.0f);
+        const auto makeup = actualValue ("MAKEUPGAIN", 2.0f);
+        drawHeader ("Compression Curve", parameterValueText (audioProcessor.apvts, "THRESHOLD")
+                                          + " | " + parameterValueText (audioProcessor.apvts, "RATIO"));
+
+        auto graph = plot.reduced (14.0f, 12.0f);
+        auto ballisticArea = graph.removeFromBottom (graph.getHeight() * 0.26f);
+        graph.removeFromBottom (10.0f);
+        drawGrid (graph, 6, 5, true);
+
+        juce::Path dryPath;
+        dryPath.startNewSubPath (plotPoint (graph, 0.0f, 0.0f));
+        dryPath.lineTo (plotPoint (graph, 1.0f, 1.0f));
+        g.setColour (theme.text.withAlpha (0.18f));
+        g.strokePath (dryPath, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        juce::Path wetPath;
+        for (int pointIndex = 0; pointIndex <= 120; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 120.0f;
+            const auto inputDb = juce::jmap (xNorm, -48.0f, 6.0f);
+            auto outputDb = inputDb <= threshold ? inputDb : threshold + (inputDb - threshold) / juce::jmax (1.0f, ratio);
+            outputDb += makeup;
+            const auto point = plotPoint (graph, xNorm, normalizedRange (outputDb, -48.0f, 6.0f));
+            if (pointIndex == 0)
+                wetPath.startNewSubPath (point);
+            else
+                wetPath.lineTo (point);
+        }
+
+        g.setColour (primary.withAlpha (0.9f));
+        g.strokePath (wetPath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        const auto thresholdX = juce::jmap (normalizedRange (threshold, -48.0f, 6.0f), graph.getX(), graph.getRight());
+        const auto thresholdY = juce::jmap (normalizedRange (threshold + makeup, -48.0f, 6.0f), graph.getBottom(), graph.getY());
+        g.setColour (secondary.withAlpha (0.45f));
+        g.drawLine (thresholdX, graph.getY(), thresholdX, graph.getBottom(), 1.0f);
+        g.drawLine (graph.getX(), thresholdY, graph.getRight(), thresholdY, 1.0f);
+
+        drawGrid (ballisticArea, 4, 2, false);
+        juce::Path envelopePath;
+        const auto attackWidth = juce::jmap (normalizedRange (attack, 0.1f, 200.0f), ballisticArea.getWidth() * 0.12f, ballisticArea.getWidth() * 0.38f);
+        const auto releaseWidth = juce::jmap (normalizedRange (release, 5.0f, 500.0f), ballisticArea.getWidth() * 0.18f, ballisticArea.getWidth() * 0.5f);
+        const auto startX = ballisticArea.getX() + 14.0f;
+        const auto topY = ballisticArea.getY() + 10.0f;
+        const auto floorY = ballisticArea.getBottom() - 12.0f;
+        envelopePath.startNewSubPath (startX, floorY);
+        envelopePath.lineTo (startX + attackWidth, topY);
+        envelopePath.lineTo (startX + attackWidth + ballisticArea.getWidth() * 0.12f, topY);
+        envelopePath.lineTo (juce::jmin (ballisticArea.getRight() - 10.0f, startX + attackWidth + ballisticArea.getWidth() * 0.12f + releaseWidth), floorY);
+        g.setColour (secondary.withAlpha (0.78f));
+        g.strokePath (envelopePath, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        return;
+    }
+
+    if (name.contains ("amp emulator"))
+    {
+        const auto driveAmount = clamp01 (actualValue ("DRIVE", 0.42f));
+        const auto tone = clamp01 (actualValue ("TONE", 0.56f));
+        const auto presence = clamp01 (actualValue ("PRESENCE", 0.46f));
+        const auto model = choiceIndex ("AMPMODEL", 1);
+        drawHeader ("Amp Response", choiceText ("AMPMODEL", "Crunch") + " | " + choiceText ("SATURATIONTYPE", "Warm"));
+        drawGrid (plot, 8, 5, true);
+
+        auto graph = plot.reduced (14.0f, 14.0f);
+        float cabCutoff = 5400.0f;
+        float lowCut = 80.0f;
+        float midCentreHz = 950.0f;
+        float modelBumpDb = 1.2f;
+
+        switch (juce::jlimit (0, 3, model))
+        {
+            case 1:
+                cabCutoff = 4300.0f;
+                midCentreHz = 920.0f;
+                modelBumpDb = 3.0f;
+                break;
+            case 2:
+                cabCutoff = 3600.0f;
+                midCentreHz = 1180.0f;
+                modelBumpDb = 5.2f;
+                break;
+            case 3:
+                cabCutoff = 2800.0f;
+                lowCut = 45.0f;
+                midCentreHz = 220.0f;
+                modelBumpDb = 4.4f;
+                break;
+            default:
+                cabCutoff = 5400.0f;
+                midCentreHz = 720.0f;
+                modelBumpDb = 0.8f;
+                break;
+        }
+
+        const auto toneCutoff = juce::jmap (tone, 1400.0f, 7000.0f);
+        const auto presenceCutoff = juce::jmap (presence, 1800.0f, 6200.0f);
+        const auto midCentreNorm = logFrequencyNorm (midCentreHz);
+        const auto presenceNorm = logFrequencyNorm (presenceCutoff);
+
+        juce::Path responsePath;
+        for (int pointIndex = 0; pointIndex <= 132; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 132.0f;
+            const auto frequency = std::exp (std::log (40.0f) + xNorm * (std::log (16000.0f) - std::log (40.0f)));
+            auto responseDb = 0.0f;
+            responseDb -= normalizedRange (lowCut / static_cast<float> (frequency), 0.0f, 1.0f) * 8.0f;
+            responseDb -= normalizedRange (static_cast<float> (frequency), cabCutoff, 16000.0f) * 10.0f;
+            responseDb -= normalizedRange (static_cast<float> (frequency), toneCutoff, 16000.0f) * 5.5f;
+            responseDb += std::exp (-std::pow ((xNorm - midCentreNorm) / 0.12f, 2.0f)) * (modelBumpDb + driveAmount * 4.0f);
+            responseDb += std::exp (-std::pow ((xNorm - presenceNorm) / 0.08f, 2.0f)) * (0.7f + presence * 6.0f);
+
+            if (model == 0)
+                responseDb -= std::exp (-std::pow ((xNorm - logFrequencyNorm (700.0f)) / 0.14f, 2.0f)) * 1.6f;
+            if (model == 3)
+                responseDb += std::exp (-std::pow ((xNorm - logFrequencyNorm (110.0f)) / 0.12f, 2.0f)) * 3.0f;
+
+            const auto point = plotPoint (graph, xNorm, normalizedRange (responseDb, -14.0f, 10.0f));
+            if (pointIndex == 0)
+                responsePath.startNewSubPath (point);
+            else
+                responsePath.lineTo (point);
+        }
+
+        g.setColour (primary.withAlpha (0.9f));
+        g.strokePath (responsePath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        return;
+    }
+
+    if (name.contains ("bit crusher"))
+    {
+        const auto bits = juce::jlimit (2, 16, juce::roundToInt (actualValue ("BITDEPTH", 8.0f)));
+        const auto sampleReduce = juce::jlimit (1, 32, juce::roundToInt (actualValue ("SAMPLEREDUCE", 6.0f)));
+        drawHeader ("Resolution + Sample Hold", juce::String (bits) + "-bit | hold x" + juce::String (sampleReduce));
+
+        auto graph = plot.reduced (14.0f, 12.0f);
+        auto transferArea = graph.removeFromLeft (graph.getWidth() * 0.42f);
+        graph.removeFromLeft (12.0f);
+        auto holdArea = graph;
+        drawGrid (transferArea, 4, 4, true);
+        drawGrid (holdArea, 8, 4, true);
+
+        juce::Path transferPath;
+        const auto visualLevels = juce::jlimit (4, 18, juce::roundToInt (juce::jmap (static_cast<float> (bits), 2.0f, 16.0f, 4.0f, 18.0f)));
+        for (int levelIndex = 0; levelIndex < visualLevels; ++levelIndex)
+        {
+            const auto x0 = static_cast<float> (levelIndex) / static_cast<float> (visualLevels);
+            const auto x1 = static_cast<float> (levelIndex + 1) / static_cast<float> (visualLevels);
+            const auto y = static_cast<float> (juce::roundToInt (x0 * (visualLevels - 1))) / static_cast<float> (visualLevels - 1);
+            const auto p0 = plotPoint (transferArea, x0, y);
+            const auto p1 = plotPoint (transferArea, x1, y);
+
+            if (levelIndex == 0)
+                transferPath.startNewSubPath (p0);
+            else
+                transferPath.lineTo (p0);
+
+            transferPath.lineTo (p1);
+        }
+        g.setColour (primary.withAlpha (0.9f));
+        g.strokePath (transferPath, juce::PathStrokeType (1.8f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+
+        juce::Path dryWave;
+        juce::Path crushedWave;
+        const auto holdSteps = juce::jmax (1, juce::roundToInt (juce::jmap (static_cast<float> (sampleReduce), 1.0f, 32.0f, 1.0f, 8.0f)));
+        float heldValue = 0.0f;
+        for (int pointIndex = 0; pointIndex <= 120; ++pointIndex)
+        {
+            const auto xNorm = static_cast<float> (pointIndex) / 120.0f;
+            const auto smoothValue = std::sin ((xNorm * 2.4f) * juce::MathConstants<float>::twoPi);
+            if (pointIndex % holdSteps == 0)
+                heldValue = std::round (smoothValue * static_cast<float> (visualLevels / 2)) / static_cast<float> (visualLevels / 2);
+
+            const auto dryPoint = plotPoint (holdArea, xNorm, normalizedRange (smoothValue, -1.0f, 1.0f));
+            const auto crushedPoint = plotPoint (holdArea, xNorm, normalizedRange (heldValue, -1.0f, 1.0f));
+
+            if (pointIndex == 0)
+            {
+                dryWave.startNewSubPath (dryPoint);
+                crushedWave.startNewSubPath (crushedPoint);
+            }
+            else
+            {
+                dryWave.lineTo (dryPoint);
+                crushedWave.lineTo (crushedPoint);
+            }
+        }
+        g.setColour (theme.text.withAlpha (0.18f));
+        g.strokePath (dryWave, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (secondary.withAlpha (0.84f));
+        g.strokePath (crushedWave, juce::PathStrokeType (1.9f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+        return;
+    }
+
+    if (name.contains ("rhythm gate"))
+    {
+        const auto syncEnabled = choiceIndex ("TIMEMODE", 0) > 0;
+        const auto rateNorm = syncEnabled ? normalizedRange (static_cast<float> (choiceIndex ("TIMEDIV", 14)), 0.0f, 15.0f)
+                                          : normalizedRange (actualValue ("RHYTHMGATE_RATE", 8.0f), 0.25f, 32.0f);
+        const auto depth = clamp01 (actualValue ("RHYTHMGATE_DEPTH", 0.8f));
+        const auto floor = clamp01 (actualValue ("GATEFLOOR", 0.06f));
+        const auto spread = clamp01 (actualValue ("FXSPREAD", 0.18f));
+        const auto shape = choiceIndex ("LFO3SHAPE", 0);
+        drawHeader ("Rhythm Gate Mask", syncEnabled ? ("Pattern " + choiceText ("TIMEDIV", "1/8T"))
+                                                    : (parameterValueText (audioProcessor.apvts, "RHYTHMGATE_RATE")
+                                                       + " | " + choiceText ("LFO3SHAPE", "Sine")));
+        drawGrid (plot, 8, 4, false);
+
+        auto lanes = plot.reduced (14.0f, 12.0f);
+        auto topLane = lanes.removeFromTop (lanes.getHeight() * 0.5f - 6.0f);
+        lanes.removeFromTop (12.0f);
+        auto bottomLane = lanes;
+        const auto cycles = 1.0f + rateNorm * 3.0f;
+
+        const auto drawGateLane = [&] (juce::Rectangle<float> lane, const juce::String& label, juce::Colour colour, float phaseOffset)
+        {
+            auto labelArea = lane.removeFromLeft (28.0f);
+            g.setFont (juce::Font (9.8f, juce::Font::bold));
+            g.setColour (hintColour);
+            g.drawFittedText (label, labelArea.toNearestInt(), juce::Justification::centredLeft, 1);
+
+            juce::Path gatePath;
+            juce::Path fillPath;
+            const auto floorY = lane.getBottom() - 6.0f;
+
+            for (int pointIndex = 0; pointIndex <= 112; ++pointIndex)
+            {
+                const auto xNorm = static_cast<float> (pointIndex) / 112.0f;
+                const auto phase = xNorm * cycles * 2.0f + nowSeconds * (0.4f + rateNorm) + phaseOffset;
+                const auto gate = 0.5f * (previewLfoValue (shape, phase) + 1.0f);
+                const auto gain = juce::jmap (depth, 1.0f, juce::jmap (gate, floor, 1.0f));
+                const auto x = juce::jmap (xNorm, lane.getX(), lane.getRight());
+                const auto y = juce::jmap (gain, floorY, lane.getY() + 4.0f);
+
+                if (pointIndex == 0)
+                {
+                    gatePath.startNewSubPath (x, y);
+                    fillPath.startNewSubPath (x, floorY);
+                    fillPath.lineTo (x, y);
+                }
+                else
+                {
+                    gatePath.lineTo (x, y);
+                    fillPath.lineTo (x, y);
+                }
+            }
+
+            fillPath.lineTo (lane.getRight(), floorY);
+            fillPath.closeSubPath();
+            g.setColour (colour.withAlpha (0.14f + depth * 0.18f));
+            g.fillPath (fillPath);
+            g.setColour (colour.withAlpha (0.88f));
+            g.strokePath (gatePath, juce::PathStrokeType (1.9f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        };
+
+        drawGateLane (topLane, "L", primary, 0.0f);
+        drawGateLane (bottomLane, "R", secondary, spread * 0.35f);
+        return;
+    }
 }
 
 void AdvancedVSTiAudioProcessorEditor::paint (juce::Graphics& g)
@@ -6253,11 +7756,23 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             card->setScale (1.0f);
             card->setVisible (true);
         }
+        for (auto* band : graphicEqBandControls)
+        {
+            band->setScale (1.0f);
+            band->setVisible (isGraphicEqPlugin());
+        }
+        for (auto* band : parametricEqBandControls)
+        {
+            band->setScale (1.0f);
+            band->setVisible (isParametricEqPlugin());
+        }
 
         const bool drumFixedLayout = isTribute909();
         const bool nativeFxLayout = audioProcessor.isNativeFxFlavor();
         const int heroHeight = nativeFxLayout ? kFixedInstrumentFxHeroHeight : kFixedInstrumentHeroHeight;
         const int heroGap = nativeFxLayout ? kFixedInstrumentFxHeroGap : kFixedInstrumentHeroGap;
+        const auto pluginName = normalizedPluginName (audioProcessor);
+        const int nativeVisualizerHeight = nativeFxLayout ? nativeFxVisualizerHeightForPluginName (pluginName) : 0;
         auto layoutBounds = getLocalBounds();
         juce::Rectangle<int> standaloneKeyboardArea;
         if (usesStandalonePreviewKeyboard() && standaloneKeyboardVisible)
@@ -6306,8 +7821,124 @@ void AdvancedVSTiAudioProcessorEditor::resized()
 
         if (nativeFxLayout)
         {
-            nativeFxVisualizerBounds = area.removeFromTop (kFixedInstrumentFxVisualizerHeight);
+            nativeFxVisualizerBounds = area.removeFromTop (nativeVisualizerHeight);
             area.removeFromTop (kFixedInstrumentFxVisualizerGap);
+        }
+
+        if (isGraphicEqPlugin())
+        {
+            for (auto* band : parametricEqBandControls)
+                band->setBounds ({});
+
+            const auto modeParameter = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter ("GRAPHICEQMODE"));
+            const auto activeBandCount = graphicEqBandCountForModeIndex (modeParameter != nullptr ? modeParameter->getIndex() : 2);
+            auto bandArea = area.removeFromTop (kGraphicEqControlAreaHeight);
+            auto trimArea = area.removeFromTop (kFixedInstrumentKnobRowHeight);
+
+            bandArea.reduce (6, 0);
+            const int gap = activeBandCount >= 48 ? 3 : (activeBandCount >= 24 ? 5 : 9);
+            const int bandWidth = juce::jmax (18, (bandArea.getWidth() - gap * (activeBandCount - 1)) / juce::jmax (1, activeBandCount));
+            const int rowWidth = bandWidth * activeBandCount + gap * (activeBandCount - 1);
+            int x = bandArea.getX() + (bandArea.getWidth() - rowWidth) / 2;
+
+            for (int bandIndex = 0; bandIndex < graphicEqBandControls.size(); ++bandIndex)
+            {
+                auto* band = graphicEqBandControls[bandIndex];
+                if (bandIndex < activeBandCount)
+                {
+                    const bool showValue = activeBandCount <= 12;
+                    const int labelStride = activeBandCount <= 12 ? 1 : (activeBandCount == 24 ? 2 : 4);
+                    band->setBandLabel (formatEqFrequencyLabel (graphicEqBandFrequencyPreview (activeBandCount, bandIndex)));
+                    band->setBandLabelVisible (bandIndex % labelStride == 0 || bandIndex == activeBandCount - 1);
+                    band->setValueLabelVisible (showValue);
+                    band->setVisible (true);
+                    band->setBounds (x, bandArea.getY(), bandWidth, bandArea.getHeight());
+                    x += bandWidth + gap;
+                }
+                else
+                {
+                    band->setVisible (false);
+                    band->setBounds ({});
+                }
+            }
+
+            for (int index = 0; index < knobCards.size(); ++index)
+            {
+                if (index < 2)
+                {
+                    const int spacing = 44;
+                    const int rowWidthForKnobs = kVirusKnobWidth * 2 + spacing;
+                    const int startX = trimArea.getX() + (trimArea.getWidth() - rowWidthForKnobs) / 2;
+                    knobCards[index]->setBounds (startX + index * (kVirusKnobWidth + spacing),
+                                                 trimArea.getY(),
+                                                 kVirusKnobWidth,
+                                                 kVirusKnobHeight);
+                }
+                else
+                {
+                    knobCards[index]->setBounds ({});
+                }
+            }
+
+            for (auto* pad : drumPads)
+                pad->setBounds ({});
+            return;
+        }
+
+        if (isParametricEqPlugin())
+        {
+            for (auto* band : graphicEqBandControls)
+                band->setBounds ({});
+
+            const auto modeParameter = dynamic_cast<juce::AudioParameterChoice*> (audioProcessor.apvts.getParameter ("PARAMETRICEQMODE"));
+            const auto activeBandCount = parametricEqBandCountForModeIndex (modeParameter != nullptr ? modeParameter->getIndex() : 1);
+            auto bandArea = area.removeFromTop (kParametricEqControlAreaHeight);
+            auto trimArea = area.removeFromTop (kFixedInstrumentKnobRowHeight);
+
+            bandArea.reduce (8, 0);
+            const int gap = activeBandCount >= 7 ? 14 : 22;
+            const int bandWidth = juce::jmax (132, (bandArea.getWidth() - gap * (activeBandCount - 1)) / juce::jmax (1, activeBandCount));
+            const int rowWidth = bandWidth * activeBandCount + gap * (activeBandCount - 1);
+            int x = bandArea.getX() + (bandArea.getWidth() - rowWidth) / 2;
+
+            for (int bandIndex = 0; bandIndex < parametricEqBandControls.size(); ++bandIndex)
+            {
+                auto* band = parametricEqBandControls[bandIndex];
+                if (bandIndex < activeBandCount)
+                {
+                    band->setVisible (true);
+                    band->setBandTitle ("BAND " + juce::String (bandIndex + 1));
+                    band->setBounds (x, bandArea.getY(), bandWidth, bandArea.getHeight());
+                    x += bandWidth + gap;
+                }
+                else
+                {
+                    band->setVisible (false);
+                    band->setBounds ({});
+                }
+            }
+
+            for (int index = 0; index < knobCards.size(); ++index)
+            {
+                if (index < 2)
+                {
+                    const int spacing = 44;
+                    const int rowWidthForKnobs = kVirusKnobWidth * 2 + spacing;
+                    const int startX = trimArea.getX() + (trimArea.getWidth() - rowWidthForKnobs) / 2;
+                    knobCards[index]->setBounds (startX + index * (kVirusKnobWidth + spacing),
+                                                 trimArea.getY(),
+                                                 kVirusKnobWidth,
+                                                 kVirusKnobHeight);
+                }
+                else
+                {
+                    knobCards[index]->setBounds ({});
+                }
+            }
+
+            for (auto* pad : drumPads)
+                pad->setBounds ({});
+            return;
         }
 
         if (isTribute909())
@@ -6381,6 +8012,11 @@ void AdvancedVSTiAudioProcessorEditor::resized()
             clearUnused();
             return;
         }
+
+        for (auto* band : graphicEqBandControls)
+            band->setBounds ({});
+        for (auto* band : parametricEqBandControls)
+            band->setBounds ({});
 
         const int knobColumns = fixedInstrumentKnobColumns (knobCards.size(), audioProcessor.isNativeFxFlavor());
         const int knobRows = juce::jmax (1, (knobCards.size() + knobColumns - 1) / knobColumns);

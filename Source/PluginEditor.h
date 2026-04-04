@@ -141,6 +141,76 @@ private:
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChoiceCard)
     };
 
+    class GraphicEqBandControl final : public juce::Component,
+                                       public juce::SettableTooltipClient
+    {
+    public:
+        explicit GraphicEqBandControl (Theme themeToUse);
+        ~GraphicEqBandControl() override = default;
+
+        void setScale (float scaleFactor);
+        void setBandLabel (const juce::String& text);
+        void setBandLabelVisible (bool shouldBeVisible);
+        void setValueLabelVisible (bool shouldBeVisible);
+        void resized() override;
+        void paint (juce::Graphics&) override;
+
+        juce::Slider slider;
+
+    private:
+        void updateMetrics();
+        void updateValueLabel();
+
+        Theme theme;
+        juce::Label bandLabel;
+        juce::Label valueLabel;
+        float scale = 1.0f;
+        bool bandLabelVisible = true;
+        bool valueLabelVisible = true;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GraphicEqBandControl)
+    };
+
+    class ParametricEqBandControl final : public juce::Component,
+                                          public juce::SettableTooltipClient
+    {
+    public:
+        ParametricEqBandControl (Theme themeToUse, int bandNumber);
+        ~ParametricEqBandControl() override = default;
+
+        void setScale (float scaleFactor);
+        void setBandTitle (const juce::String& text);
+        void resized() override;
+        void paint (juce::Graphics&) override;
+
+        juce::Slider freqSlider;
+        juce::Slider gainSlider;
+        juce::Slider qSlider;
+
+    private:
+        void updateMetrics();
+        void updateValueLabels();
+        void configureSlider (juce::Slider& slider);
+        void configureValueLabel (juce::Label& label);
+        void configureTitleLabel (juce::Label& label, const juce::String& text);
+        void layoutMiniStrip (juce::Rectangle<int> area,
+                              juce::Label& titleLabel,
+                              juce::Slider& slider,
+                              juce::Label& valueLabel);
+
+        Theme theme;
+        juce::Label bandLabel;
+        juce::Label freqTitleLabel;
+        juce::Label freqValueLabel;
+        juce::Label gainTitleLabel;
+        juce::Label gainValueLabel;
+        juce::Label qTitleLabel;
+        juce::Label qValueLabel;
+        float scale = 1.0f;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParametricEqBandControl)
+    };
+
     class DrumPad final : public juce::Component
     {
     public:
@@ -230,9 +300,13 @@ private:
     [[nodiscard]] bool isTribute303() const noexcept;
     [[nodiscard]] bool isTribute909() const noexcept;
     [[nodiscard]] bool isTributeVirus() const noexcept;
+    [[nodiscard]] bool isGraphicEqPlugin() const noexcept;
+    [[nodiscard]] bool isParametricEqPlugin() const noexcept;
+    [[nodiscard]] bool isEqPlugin() const noexcept;
     [[nodiscard]] bool usesDrumPadLayout() const noexcept;
     [[nodiscard]] bool usesFixedInstrumentLayout() const noexcept;
     [[nodiscard]] bool usesStandalonePreviewKeyboard() const noexcept;
+    void updateEqAnalyzerHistory();
     void syncExternalPadDisplays();
     void showFixedInstrumentOsdForParam (const juce::String& paramId,
                                          const juce::String& titleOverride = {},
@@ -281,6 +355,8 @@ private:
     juce::Label subtitleLabel;
     juce::OwnedArray<KnobCard> knobCards;
     juce::OwnedArray<ChoiceCard> choiceCards;
+    juce::OwnedArray<GraphicEqBandControl> graphicEqBandControls;
+    juce::OwnedArray<ParametricEqBandControl> parametricEqBandControls;
     juce::OwnedArray<DrumPad> drumPads;
     juce::OwnedArray<LedToggleButton> virusPanelButtons;
     juce::Rectangle<int> nativeFxVisualizerBounds;
@@ -321,6 +397,12 @@ private:
     bool virusActiveArpMenu = false;
     bool virusShiftMode = false;
     double virusPresetNavigationGuardUntilMs = 0.0;
+    static constexpr int eqHistoryColumns = 112;
+    static constexpr int eqHistoryRows = 32;
+    std::array<std::array<float, eqHistoryRows>, eqHistoryColumns> eqInputHistory {};
+    std::array<std::array<float, eqHistoryRows>, eqHistoryColumns> eqOutputHistory {};
+    int eqHistoryWriteIndex = 0;
+    bool eqHistoryPrimed = false;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAttachments;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>> comboAttachments;
     std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>> buttonAttachments;
